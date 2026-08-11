@@ -11,7 +11,12 @@ let dbPromise: Promise<Database> | null = null;
 
 function db(): Promise<Database> {
   if (!dbPromise) {
-    dbPromise = Database.load("sqlite:velo.db");
+    dbPromise = Database.load("sqlite:velo.db").then(async (database) => {
+      // journal_mode is persisted in the database file, so this applies to every
+      // connection in the plugin's pool: readers stop blocking the writer.
+      await database.execute("PRAGMA journal_mode=WAL");
+      return database;
+    });
   }
   return dbPromise;
 }
