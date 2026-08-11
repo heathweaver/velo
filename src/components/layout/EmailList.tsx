@@ -360,6 +360,23 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   // Stable thread ID key — only changes when the actual set of thread IDs changes, not on every array reference
   const threadIdKey = useMemo(() => threads.map((t) => t.id).join(","), [threads]);
 
+  /**
+   * Forces the metadata below to be re-read even when the thread ids are
+   * unchanged.
+   *
+   * Recategorizing a thread — from the contact panel, the context menu, a quick
+   * step — changes no thread's id, so the effect keyed on threadIdKey never
+   * re-ran and the category pill kept showing the old value until the view was
+   * left and re-entered. Everything that changes this metadata already
+   * announces itself with velo-sync-done.
+   */
+  const [metadataNonce, setMetadataNonce] = useState(0);
+  useEffect(() => {
+    const bump = () => setMetadataNonce((n) => n + 1);
+    window.addEventListener("velo-sync-done", bump);
+    return () => window.removeEventListener("velo-sync-done", bump);
+  }, []);
+
   // Load all thread metadata (categories, unread counts, follow-ups, bundles) in one coordinated effect
   useEffect(() => {
     let cancelled = false;
@@ -457,7 +474,7 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
 
     loadMetadata();
     return () => { cancelled = true; };
-  }, [threadIdKey, activeLabel, activeCategory, activeAccountId]);
+  }, [threadIdKey, activeLabel, activeCategory, activeAccountId, metadataNonce]);
 
   // Auto-scroll selected thread into view (triggered by keyboard navigation)
   useEffect(() => {
