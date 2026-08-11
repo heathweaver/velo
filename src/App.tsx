@@ -336,7 +336,12 @@ export default function App() {
           .filter((a) => a.isActive)
           .map((a) => a.id)
           .sort((a, b) => (a === activeStoreId ? -1 : b === activeStoreId ? 1 : 0));
-        const emailAccountIds = mapped.filter((a) => a.isActive && a.provider !== "caldav").map((a) => a.id);
+        // Send-as aliases are a Gmail API concept. Including IMAP accounts here
+        // meant getGmailClient threw once per IMAP account on every launch,
+        // caught and logged as a warning nobody saw.
+        const emailAccountIds = mapped
+          .filter((a) => a.isActive && a.provider === "gmail_api")
+          .map((a) => a.id);
         for (const accountId of emailAccountIds) {
           try {
             const client = await getGmailClient(accountId);
