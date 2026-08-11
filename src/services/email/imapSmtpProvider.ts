@@ -13,6 +13,7 @@ import {
   imapFetchRawMessage,
   imapTestConnection,
   imapAppendMessage,
+  imapSearchMessageId,
   smtpSendEmail,
   smtpTestConnection,
   type ImapConfig,
@@ -38,6 +39,14 @@ function base64UrlDecode(input: string): string {
   const binary = atob(base64);
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Pull the Message-ID header out of a raw message, angle brackets included.
+ */
+function extractMessageId(raw: string): string | null {
+  const match = raw.match(/^Message-ID:\s*(<[^>]+>)/im);
+  return match?.[1] ?? null;
 }
 
 /**
@@ -641,7 +650,33 @@ export class ImapSmtpProvider implements EmailProvider {
 
     await imapAppendMessage(config, draftsFolder, rawBase64Url, "(\\Draft)");
 
-    // IMAP APPEND does not return the new UID, so generate a pseudo draft ID
+    // Resolve the UID the server assigned, so this draft can be deleted later.
+    // APPEND only reports it via UIDPLUS, which async-imap does not surface, so
+    // look it up by the Message-ID the message was built with. Without a real
+    // UID the id below cannot be mapped back to a server message and every sent
+    // draft stays in the Drafts folder forever.
+    // Decoding is best-effort: a malformed payload must not stop the draft
+    // being created, only its UID being resolved.
+    let messageId: string | null = null;
+    try {
+      messageId = extractMessageId(base64UrlDecode(rawBase64Url));
+    } catch {
+      messageId = null;
+    }
+
+    if (messageId) {
+      try {
+        const uid = await imapSearchMessageId(config, draftsFolder, messageId);
+        if (uid !== null) {
+          return { draftId: `imap-${this.accountId}-${draftsFolder}-${uid}` };
+        }
+      } catch (err) {
+        console.warn("Could not resolve appended draft UID:", err);
+      }
+    }
+
+    // Fall back to an id that at least identifies the draft locally. Deletion
+    // will warn rather than silently believing it succeeded.
     const draftId = `imap-draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return { draftId };
   }

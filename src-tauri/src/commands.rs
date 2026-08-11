@@ -121,6 +121,15 @@ pub async fn imap_append_message(
 }
 
 #[tauri::command]
+pub async fn imap_search_message_id(
+    config: ImapConfig,
+    folder: String,
+    message_id: String,
+) -> Result<Option<u32>, String> {
+    ops::imap_search_message_id(config, folder, message_id).await
+}
+
+#[tauri::command]
 pub async fn imap_search_folder(
     config: ImapConfig,
     folder: String,

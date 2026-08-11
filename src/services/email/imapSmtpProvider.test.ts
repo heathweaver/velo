@@ -32,6 +32,7 @@ vi.mock("../imap/tauriCommands", () => ({
   imapFetchRawMessage: vi.fn(),
   imapTestConnection: vi.fn(),
   imapAppendMessage: vi.fn(),
+  imapSearchMessageId: vi.fn(),
   smtpSendEmail: vi.fn(),
   smtpTestConnection: vi.fn(),
 }));
@@ -65,6 +66,7 @@ import {
   imapDeleteMessages,
   imapTestConnection,
   imapAppendMessage,
+  imapSearchMessageId,
   smtpSendEmail,
   smtpTestConnection,
 } from "../imap/tauriCommands";
@@ -897,6 +899,48 @@ describe("ImapSmtpProvider", () => {
         [211],
         "INBOX",
       );
+    });
+  });
+
+  describe("createDraft UID resolution", () => {
+    const RAW_WITH_MESSAGE_ID = "TWVzc2FnZS1JRDogPGFiYzEyM0BleGFtcGxlLmNvbT4NClN1YmplY3Q6IERyYWZ0DQoNCkJvZHk";
+
+    it("returns an addressable draft id built from the server UID", async () => {
+      // APPEND does not report the UID it assigned, so the draft was previously
+      // given a synthetic id that deleteDraft could not map back to a server
+      // message — every sent draft stayed in the Drafts folder forever.
+      vi.mocked(findSpecialFolder).mockResolvedValue("INBOX.Drafts");
+      vi.mocked(imapAppendMessage).mockResolvedValue(undefined);
+      vi.mocked(imapSearchMessageId).mockResolvedValue(4321);
+
+      const result = await provider.createDraft(RAW_WITH_MESSAGE_ID);
+
+      expect(imapSearchMessageId).toHaveBeenCalledWith(
+        mockImapConfig,
+        "INBOX.Drafts",
+        "<abc123@example.com>",
+      );
+      expect(result.draftId).toBe("imap-acc-1-INBOX.Drafts-4321");
+    });
+
+    it("falls back to a local id when the UID cannot be resolved", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue("INBOX.Drafts");
+      vi.mocked(imapAppendMessage).mockResolvedValue(undefined);
+      vi.mocked(imapSearchMessageId).mockResolvedValue(null);
+
+      const result = await provider.createDraft(RAW_WITH_MESSAGE_ID);
+
+      expect(result.draftId).toMatch(/^imap-draft-/);
+    });
+
+    it("still creates the draft when the payload cannot be decoded", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue("INBOX.Drafts");
+      vi.mocked(imapAppendMessage).mockResolvedValue(undefined);
+
+      const result = await provider.createDraft("not-valid-base64!!!");
+
+      expect(imapAppendMessage).toHaveBeenCalled();
+      expect(result.draftId).toMatch(/^imap-draft-/);
     });
   });
 });

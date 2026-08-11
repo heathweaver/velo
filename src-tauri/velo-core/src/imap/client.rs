@@ -389,6 +389,36 @@ pub async fn fetch_new_uids(
     Ok(result)
 }
 
+/// Find a message's UID by its RFC 822 Message-ID header.
+///
+/// IMAP APPEND does not report the UID it assigned unless the server supports
+/// UIDPLUS, and async-imap does not surface APPENDUID. Searching for the
+/// Message-ID we generated when building the message is portable across servers
+/// and gives the same answer, which is what lets an appended draft be deleted
+/// later instead of lingering in the Drafts folder forever.
+pub async fn search_by_message_id(
+    session: &mut ImapSession,
+    folder: &str,
+    message_id: &str,
+) -> Result<Option<u32>, String> {
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(folder))
+        .await
+        .map_err(|_| format!("SELECT {folder} timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("SELECT {folder} failed: {e}"))?;
+
+    // Quotes inside the header value would terminate the search string early.
+    let sanitized = message_id.replace('"', "");
+    let query = format!("HEADER Message-ID \"{sanitized}\"");
+
+    let uids = tokio::time::timeout(IMAP_SEARCH_TIMEOUT, session.uid_search(&query))
+        .await
+        .map_err(|_| format!("UID SEARCH timed out after {}s — check your server settings or network connection", IMAP_SEARCH_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("UID SEARCH failed: {e}"))?;
+
+    // Most recent wins if a server somehow holds duplicates.
+    Ok(uids.into_iter().max())
+}
+
 /// Search for all UIDs in a folder using `UID SEARCH ALL`.
 /// Returns real UIDs sorted ascending — avoids the sparse UID gap problem.
 pub async fn search_all_uids(

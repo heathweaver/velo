@@ -205,6 +205,21 @@ pub async fn imap_fetch_attachment(
     Ok(data)
 }
 
+/// Resolve a message's UID from its Message-ID header.
+///
+/// Used after APPEND so a draft can be addressed — and therefore deleted —
+/// later, without depending on server UIDPLUS support.
+pub async fn imap_search_message_id(
+    config: ImapConfig,
+    folder: String,
+    message_id: String,
+) -> Result<Option<u32>, String> {
+    let mut session = imap_client::connect(&config).await?;
+    let uid = imap_client::search_by_message_id(&mut session, &folder, &message_id).await?;
+    let _ = session.logout().await;
+    Ok(uid)
+}
+
 pub async fn imap_append_message(
     config: ImapConfig,
     folder: String,

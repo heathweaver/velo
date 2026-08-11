@@ -286,6 +286,20 @@ export async function imapDeltaCheck(
 }
 
 /**
+ * Resolve a message's UID from its Message-ID header.
+ *
+ * APPEND does not report the UID it assigned unless the server supports
+ * UIDPLUS, so this is how an appended draft becomes addressable.
+ */
+export async function imapSearchMessageId(
+  config: ImapConfig,
+  folder: string,
+  messageId: string,
+): Promise<number | null> {
+  return invoke<number | null>('imap_search_message_id', { config, folder, messageId });
+}
+
+/**
  * Sync a folder in a single IMAP connection: SELECT → UID SEARCH → batched UID FETCH.
  * When `sinceDate` is provided (format `DD-Mon-YYYY`), uses `UID SEARCH SINCE <date>`
  * to only fetch messages from that date onward, avoiding timeouts on large folders.
