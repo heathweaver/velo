@@ -157,3 +157,29 @@ export async function getUncategorizedInboxThreadIds(
     [accountId, limit],
   );
 }
+
+/**
+ * File every thread this sender appears in under a category.
+ *
+ * Marked manual so the classifier leaves it alone afterwards: the user picked
+ * this sender's category explicitly, and having the AI quietly reassign it on
+ * the next sweep is exactly the behaviour that makes categorization feel
+ * arbitrary. Returns how many threads were affected so the caller can say so.
+ */
+export async function setCategoryForSender(
+  accountId: string,
+  fromAddress: string,
+  category: string,
+): Promise<number> {
+  const db = await getDb();
+  const threads = await db.select<{ thread_id: string }[]>(
+    `SELECT DISTINCT thread_id FROM messages
+     WHERE account_id = $1 AND lower(from_address) = lower($2)`,
+    [accountId, fromAddress],
+  );
+
+  for (const { thread_id } of threads) {
+    await setThreadCategory(accountId, thread_id, category, true);
+  }
+  return threads.length;
+}

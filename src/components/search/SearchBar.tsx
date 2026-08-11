@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { searchMessages } from "@/services/db/search";
+import { runSearch } from "@/services/search/runSearch";
 import { useAccountStore } from "@/stores/accountStore";
 import { useThreadStore } from "@/stores/threadStore";
 import { useSmartFolderStore } from "@/stores/smartFolderStore";
@@ -21,24 +21,12 @@ export function SearchBar() {
 
   const handleChange = useCallback(
     (value: string) => {
-      const { setSearch } = useThreadStore.getState();
-      setSearch(value, useThreadStore.getState().searchThreadIds);
+      // Show the typed text immediately; the query itself is debounced.
+      useThreadStore.getState().setSearch(value, useThreadStore.getState().searchThreadIds);
 
       if (debounceRef.current) clearTimeout(debounceRef.current);
-
-      if (value.trim().length < 2) {
-        setSearch(value, null);
-        return;
-      }
-
-      debounceRef.current = setTimeout(async () => {
-        try {
-          const hits = await searchMessages(value, activeAccountId ?? undefined, 100);
-          const threadIds = new Set(hits.map((h) => h.thread_id));
-          useThreadStore.getState().setSearch(value, threadIds);
-        } catch {
-          useThreadStore.getState().setSearch(value, null);
-        }
+      debounceRef.current = setTimeout(() => {
+        runSearch(value, activeAccountId);
       }, 200);
     },
     [activeAccountId],

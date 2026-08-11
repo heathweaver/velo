@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Mail, Clock, X, Send, Copy, Star, UserPlus, Check, PenLine,
-  Paperclip, Building2, ChevronDown, ChevronRight,
+  Paperclip, Building2, ChevronDown, ChevronRight, Search,
 } from "lucide-react";
 import {
   getContactByEmail, getContactStats, getRecentThreadsWithContact,
@@ -10,6 +10,11 @@ import {
   type ContactStats, type DbContact, type ContactAttachment, type SameDomainContact,
 } from "@/services/db/contacts";
 import { isVipSender, addVipSender, removeVipSender } from "@/services/db/notificationVips";
+import { getFiltersForAccount, insertFilter, updateFilter, type FilterActions } from "@/services/db/filters";
+import { setCategoryForSender } from "@/services/db/threadCategories";
+import { useCategoryStore } from "@/stores/categoryStore";
+import { getCategoryIcon } from "@/constants/categoryIcons";
+import { runSearch } from "@/services/search/runSearch";
 import { fetchAndCacheGravatarUrl } from "@/services/contacts/gravatar";
 import { useThreadStore } from "@/stores/threadStore";
 import { useComposerStore } from "@/stores/composerStore";
@@ -41,11 +46,16 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
   const [addedFeedback, setAddedFeedback] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState("");
+  const [contactCategory, setContactCategory] = useState<string | null>(null);
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const [categoryFeedback, setCategoryFeedback] = useState<string | null>(null);
+  const categories = useCategoryStore((s) => s.categories).filter((c) => c.isEnabled);
 
   const loadedRef = useRef<string | null>(null);
   const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const categoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleThreadClick = useCallback(async (threadId: string) => {
     const { threads, threadMap, setThreads } = useThreadStore.getState();
     if (threadMap.has(threadId)) {
@@ -112,6 +122,25 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
     // Load auth results
     getLatestAuthResult(email).then((r) => { if (!cancelled) setAuthResults(r); });
 
+    // Show which category, if any, this sender is already pinned to
+    setCategoryFeedback(null);
+    getFiltersForAccount(accountId).then((filters) => {
+      if (cancelled) return;
+      for (const f of filters) {
+        try {
+          const criteria = JSON.parse(f.criteria_json) as { from?: string };
+          const actions = JSON.parse(f.actions_json) as FilterActions;
+          if (criteria.from?.toLowerCase() === email.toLowerCase() && actions.setCategory) {
+            setContactCategory(actions.setCategory);
+            return;
+          }
+        } catch {
+          // Skip malformed rules
+        }
+      }
+      setContactCategory(null);
+    });
+
     return () => { cancelled = true; };
   }, [email, accountId]);
 
@@ -163,6 +192,67 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
     addedTimerRef.current = setTimeout(() => setAddedFeedback(false), 1500);
   }, [email, name]);
 
+  /**
+   * File every message from this contact under a category, and keep it there.
+   *
+   * Two halves, and both matter. The filter rule is what makes it stick —
+   * without it the classifier re-decides this sender on the next sweep. The
+   * backfill is what makes it visible: a rule alone only affects mail that
+   * arrives from now on, which reads as the button having done nothing.
+   */
+  const ruleName = contact?.display_name ?? name ?? email;
+
+  const handleSetCategory = useCallback(async (categoryId: string) => {
+    setCategoryBusy(true);
+    try {
+      const existing = await getFiltersForAccount(accountId);
+      const match = existing.find((f) => {
+        try {
+          const criteria = JSON.parse(f.criteria_json) as { from?: string };
+          return criteria.from?.toLowerCase() === email.toLowerCase();
+        } catch {
+          return false;
+        }
+      });
+
+      if (match) {
+        const actions = JSON.parse(match.actions_json) as FilterActions;
+        await updateFilter(match.id, { actions: { ...actions, setCategory: categoryId } });
+      } else {
+        await insertFilter({
+          accountId,
+          name: `${ruleName} → ${categoryId}`,
+          criteria: { from: email },
+          actions: { setCategory: categoryId },
+        });
+      }
+
+      const affected = await setCategoryForSender(accountId, email, categoryId);
+      setContactCategory(categoryId);
+      setCategoryFeedback(`${affected} message${affected === 1 ? "" : "s"} filed`);
+      window.dispatchEvent(new Event("velo-sync-done"));
+    } catch (err) {
+      console.error("Failed to set contact category:", err);
+      setCategoryFeedback("Failed");
+    } finally {
+      setCategoryBusy(false);
+      if (categoryTimerRef.current) clearTimeout(categoryTimerRef.current);
+      categoryTimerRef.current = setTimeout(() => setCategoryFeedback(null), 2500);
+    }
+  }, [accountId, email, ruleName]);
+
+  /**
+   * Hand this contact to the search bar.
+   *
+   * Deliberately not a bespoke result list: putting `from:` into the real
+   * search box means every bulk action the app already has — select all,
+   * archive, move, quick steps — works on the result without any of it being
+   * reimplemented here.
+   */
+  const handleSearchAll = useCallback(() => {
+    runSearch(`from:${email}`, accountId);
+  }, [accountId, email]);
+
   const handleStartEditName = useCallback(() => {
     setEditNameValue(contact?.display_name ?? name ?? "");
     setEditingName(true);
@@ -182,6 +272,7 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
       if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       if (addedTimerRef.current) clearTimeout(addedTimerRef.current);
+      if (categoryTimerRef.current) clearTimeout(categoryTimerRef.current);
     };
   }, []);
 
@@ -307,6 +398,53 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
             <span>Edit name</span>
           </button>
         ) : null}
+
+        {/* Category */}
+        {categories.length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary mb-2">
+              Always file as
+            </h4>
+            <div className="flex flex-wrap gap-1">
+              {categories.map((cat) => {
+                const CatIcon = getCategoryIcon(cat.icon);
+                const isActive = contactCategory === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => handleSetCategory(cat.id)}
+                    disabled={categoryBusy}
+                    title={cat.description || `File mail from ${email} as ${cat.name}`}
+                    className={`flex items-center gap-1 px-2 py-1 text-[0.6875rem] rounded-md border transition-colors disabled:opacity-50 ${
+                      isActive
+                        ? "bg-accent/10 border-accent/40 text-accent"
+                        : "border-border-primary text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                    }`}
+                  >
+                    <CatIcon size={11} />
+                    {cat.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[0.625rem] text-text-tertiary mt-1.5">
+              {categoryFeedback
+                ? categoryFeedback
+                : contactCategory
+                  ? "Existing and future mail from this sender is filed here."
+                  : "Creates a rule and files mail already received."}
+            </p>
+          </div>
+        )}
+
+        {/* Bulk actions */}
+        <button
+          onClick={handleSearchAll}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 mb-4 text-xs text-text-secondary border border-border-primary rounded-md hover:text-text-primary hover:bg-bg-hover transition-colors"
+        >
+          <Search size={12} />
+          <span>Search all mail from this contact</span>
+        </button>
 
         {/* Stats */}
         {stats && (

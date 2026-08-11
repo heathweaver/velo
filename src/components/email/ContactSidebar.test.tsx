@@ -27,6 +27,36 @@ vi.mock("@/services/db/contacts", () => ({
   getLatestAuthResult: vi.fn(() => Promise.resolve(null)),
 }));
 
+const mockGetFilters = vi.fn(() => Promise.resolve([] as unknown[]));
+const mockInsertFilter = vi.fn(() => Promise.resolve("filter-1"));
+const mockUpdateFilter = vi.fn(() => Promise.resolve());
+const mockSetCategoryForSender = vi.fn(() => Promise.resolve(3));
+const mockRunSearch = vi.fn(() => Promise.resolve());
+
+vi.mock("@/services/db/filters", () => ({
+  getFiltersForAccount: (...args: unknown[]) => mockGetFilters(...(args as [])),
+  insertFilter: (...args: unknown[]) => mockInsertFilter(...(args as [])),
+  updateFilter: (...args: unknown[]) => mockUpdateFilter(...(args as [])),
+}));
+
+vi.mock("@/services/db/threadCategories", () => ({
+  setCategoryForSender: (...args: unknown[]) => mockSetCategoryForSender(...(args as [])),
+}));
+
+vi.mock("@/services/search/runSearch", () => ({
+  runSearch: (...args: unknown[]) => mockRunSearch(...(args as [])),
+}));
+
+vi.mock("@/stores/categoryStore", () => ({
+  useCategoryStore: (selector: (s: { categories: unknown[] }) => unknown) =>
+    selector({
+      categories: [
+        { id: "Reads", name: "Reads", description: "Long-form I subscribed to", icon: null, sortOrder: 0, isEnabled: true, isDefault: false },
+        { id: "Primary", name: "Primary", description: "", icon: null, sortOrder: 1, isEnabled: true, isDefault: true },
+      ],
+    }),
+}));
+
 vi.mock("@/services/db/notificationVips", () => ({
   isVipSender: vi.fn(() => Promise.resolve(false)),
   addVipSender: vi.fn(() => Promise.resolve()),
@@ -185,5 +215,57 @@ describe("ContactSidebar", () => {
     });
 
     expect(screen.queryByText("Notes")).not.toBeInTheDocument();
+  });
+
+  describe("category assignment", () => {
+    it("writes a rule and files the mail already received", async () => {
+      // Both halves matter: the rule is what keeps the classifier from
+      // re-deciding this sender, and the backfill is what makes the click
+      // visibly do something to mail that is already there.
+      render(<ContactSidebar {...defaultProps} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Reads/ }));
+
+      await waitFor(() => {
+        expect(mockInsertFilter).toHaveBeenCalledWith(
+          expect.objectContaining({
+            criteria: { from: "alice@company.com" },
+            actions: { setCategory: "Reads" },
+          }),
+        );
+      });
+      expect(mockSetCategoryForSender).toHaveBeenCalledWith("acc-1", "alice@company.com", "Reads");
+    });
+
+    it("updates the existing rule rather than adding a second one", async () => {
+      // Two rules matching the same sender would leave the winner up to
+      // ordering, so re-picking a category has to edit the rule in place.
+      mockGetFilters.mockResolvedValue([
+        {
+          id: "filter-existing",
+          criteria_json: JSON.stringify({ from: "alice@company.com" }),
+          actions_json: JSON.stringify({ setCategory: "Primary", archive: true }),
+        },
+      ]);
+
+      render(<ContactSidebar {...defaultProps} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Reads/ }));
+
+      await waitFor(() => {
+        expect(mockUpdateFilter).toHaveBeenCalledWith("filter-existing", {
+          actions: { setCategory: "Reads", archive: true },
+        });
+      });
+      expect(mockInsertFilter).not.toHaveBeenCalled();
+    });
+
+    it("hands a from: query to the search bar for bulk actions", async () => {
+      render(<ContactSidebar {...defaultProps} />);
+
+      fireEvent.click(await screen.findByRole("button", { name: /Search all mail/ }));
+
+      expect(mockRunSearch).toHaveBeenCalledWith("from:alice@company.com", "acc-1");
+    });
   });
 });
