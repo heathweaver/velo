@@ -1,10 +1,12 @@
 import { render, waitFor } from "@testing-library/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { EmailRenderer } from "./EmailRenderer";
 import type { DbAttachment } from "@/services/db/attachments";
 
 // Mock dependencies
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn(),
+  // Returns a promise like the real plugin: the caller attaches .catch to it.
+  openUrl: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/utils/sanitize", () => ({
@@ -189,5 +191,89 @@ describe("EmailRenderer", () => {
     );
 
     expect(mockFetchAttachment).not.toHaveBeenCalled();
+  });
+
+  describe("link handling", () => {
+    function postFromFrame(container: HTMLElement, data: unknown) {
+      const iframe = container.querySelector("iframe")!;
+      // jsdom gives the frame a contentWindow; the component identifies its own
+      // frame by that window rather than by origin, since a sandboxed frame
+      // reports "null".
+      window.dispatchEvent(
+        new MessageEvent("message", { data, source: iframe.contentWindow }),
+      );
+    }
+
+    it("opens a link the frame reports", async () => {
+      // The frame has to run a script to report anything at all. The previous
+      // sandbox (allow-same-origin, no allow-scripts) disabled scripting for
+      // that document, so no click was ever observed and links did nothing.
+      const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      postFromFrame(container, { source: "velo-email", type: "link", href: "https://example.com/a" });
+
+      await waitFor(() => {
+        expect(openUrl).toHaveBeenCalledWith("https://example.com/a");
+      });
+    });
+
+    it("opens mailto: links", async () => {
+      const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      postFromFrame(container, { source: "velo-email", type: "link", href: "mailto:a@b.com" });
+
+      await waitFor(() => expect(openUrl).toHaveBeenCalledWith("mailto:a@b.com"));
+    });
+
+    it("refuses schemes a mail client should not open", () => {
+      // The href is email content, so it is not trusted to name any scheme the
+      // OS might route to another application.
+      const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      postFromFrame(container, { source: "velo-email", type: "link", href: "file:///etc/passwd" });
+
+      expect(openUrl).not.toHaveBeenCalled();
+    });
+
+    it("ignores messages from anything other than its own frame", () => {
+      // Any page in any frame can postMessage to this window.
+      render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { source: "velo-email", type: "link", href: "https://evil.example" },
+        }),
+      );
+
+      expect(openUrl).not.toHaveBeenCalled();
+    });
+
+    it("ignores messages that are not ours", () => {
+      const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      postFromFrame(container, { type: "link", href: "https://example.com" });
+
+      expect(openUrl).not.toHaveBeenCalled();
+    });
+
+    it("sizes the frame from the height the frame reports", () => {
+      // The parent cannot read scrollHeight across an opaque origin, so the
+      // height has to arrive by message or the frame collapses.
+      const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+
+      postFromFrame(container, { source: "velo-email", type: "height", height: 420 });
+
+      expect(container.querySelector("iframe")!.style.height).toBe("420px");
+    });
+  });
+
+  it("sandboxes the frame without same-origin access", () => {
+    // allow-scripts with allow-same-origin would let email-borne script reach
+    // the app and remove its own sandbox.
+    const { container } = render(<EmailRenderer html="<p>hi</p>" text={null} />);
+    const sandbox = container.querySelector("iframe")!.getAttribute("sandbox");
+
+    expect(sandbox).toContain("allow-scripts");
+    expect(sandbox).not.toContain("allow-same-origin");
   });
 });
