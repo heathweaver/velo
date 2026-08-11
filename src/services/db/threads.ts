@@ -49,6 +49,41 @@ export async function getThreadsForAccount(
   );
 }
 
+/**
+ * Load threads by id, ignoring which folder or label they live in.
+ *
+ * Search results are the one view that must escape the current folder: a hit in
+ * Archive is still a hit when you searched from the Inbox. The list otherwise
+ * only holds the threads of the folder being viewed, so intersecting search
+ * results with it silently hides everything filed elsewhere.
+ */
+export async function getThreadsByIds(
+  ids: string[],
+  accountId?: string,
+  limit = 200,
+): Promise<DbThread[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+
+  const capped = ids.slice(0, limit);
+  const placeholders = capped.map((_, i) => `$${i + 1}`).join(", ");
+  const params: unknown[] = [...capped];
+  let accountClause = "";
+  if (accountId) {
+    params.push(accountId);
+    accountClause = ` AND t.account_id = $${params.length}`;
+  }
+
+  return db.select<DbThread[]>(
+    `SELECT t.*, m.from_name, m.from_address FROM threads t
+     LEFT JOIN messages m ON m.account_id = t.account_id AND m.thread_id = t.id
+       AND m.date = (SELECT MAX(m2.date) FROM messages m2 WHERE m2.account_id = t.account_id AND m2.thread_id = t.id)
+     WHERE t.id IN (${placeholders})${accountClause}
+     ORDER BY t.is_pinned DESC, t.last_message_at DESC`,
+    params,
+  );
+}
+
 export async function getThreadsForCategory(
   accountId: string,
   category: string,

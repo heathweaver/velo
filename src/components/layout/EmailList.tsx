@@ -9,7 +9,7 @@ import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useActiveLabel, useSelectedThreadId, useActiveCategory } from "@/hooks/useRouteNavigation";
 import { navigateToThread, navigateToLabel } from "@/router/navigate";
-import { getThreadsForAccount, getThreadsForCategory, getThreadLabelIds } from "@/services/db/threads";
+import { getThreadsForAccount, getThreadsForCategory, getThreadsByIds, getThreadLabelIds } from "@/services/db/threads";
 import { getCategoriesForThreads, getCategoryUnreadCounts } from "@/services/db/threadCategories";
 import { getActiveFollowUpThreadIds } from "@/services/db/followUpReminders";
 import { getBundleRules, getHeldThreadIds, getBundleSummaries, type DbBundleRule } from "@/services/db/bundleRules";
@@ -480,6 +480,47 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   useEffect(() => {
     loadThreadsRef.current = loadThreads;
   }, [loadThreads]);
+
+  /**
+   * Show search hits from wherever they live, not just the current folder.
+   *
+   * The list holds the threads of the folder being viewed, and results used to
+   * be applied as a filter over it — so a search run from the Inbox could only
+   * ever return inbox threads, and a hit sitting in Archive was silently
+   * dropped. Loading the matching threads by id instead lets search escape the
+   * folder, the way it does in every other mail client.
+   */
+  const wasSearchingRef = useRef(false);
+  useEffect(() => {
+    if (searchThreadIds === null) {
+      // Search cleared — put the folder's own listing back.
+      if (wasSearchingRef.current) {
+        wasSearchingRef.current = false;
+        loadThreadsRef.current();
+      }
+      return;
+    }
+
+    wasSearchingRef.current = true;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // All Inboxes spans every account, so results should too.
+        const scopeToAccount = isAllInboxes ? undefined : activeAccountId ?? undefined;
+        const dbThreads = await getThreadsByIds([...searchThreadIds], scopeToAccount);
+        if (cancelled) return;
+        const mapped = await mapDbThreads(dbThreads);
+        if (cancelled) return;
+        setThreads(mapped);
+        setHasMore(false);
+      } catch (err) {
+        console.error("Failed to load search results:", err);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [searchThreadIds, activeAccountId, isAllInboxes, mapDbThreads, setThreads]);
 
   // Listen for sync completion to reload (debounced to avoid waterfall from multiple emitters)
   useEffect(() => {

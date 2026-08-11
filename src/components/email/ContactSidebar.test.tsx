@@ -265,7 +265,7 @@ describe("ContactSidebar", () => {
 
       fireEvent.click(await screen.findByRole("button", { name: /Search all mail/ }));
 
-      expect(mockRunSearch).toHaveBeenCalledWith("from:alice@company.com", "acc-1");
+      expect(mockRunSearch).toHaveBeenCalledWith("from:alice@company.com", "acc-1", 500);
     });
   });
 });

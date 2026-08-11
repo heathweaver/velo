@@ -250,7 +250,9 @@ export function ContactSidebar({ email, name, accountId, onClose }: ContactSideb
    * reimplemented here.
    */
   const handleSearchAll = useCallback(() => {
-    runSearch(`from:${email}`, accountId);
+    // A higher cap than the search bar's: this button says "all mail from this
+    // contact", and a long correspondence easily passes the default.
+    runSearch(`from:${email}`, accountId, 500);
   }, [accountId, email]);
 
   const handleStartEditName = useCallback(() => {
