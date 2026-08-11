@@ -452,19 +452,30 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     }
   }, [selectedThreadId]);
 
+  // Always reload through the *current* loader.
+  //
+  // loadThreads closes over activeLabel and activeCategory, so a debounced
+  // reload scheduled before the user switches view re-runs the previous view's
+  // query and overwrites the list now on screen — the new view loads correctly
+  // and is replaced by the old one a second or two later.
+  const loadThreadsRef = useRef(loadThreads);
+  useEffect(() => {
+    loadThreadsRef.current = loadThreads;
+  }, [loadThreads]);
+
   // Listen for sync completion to reload (debounced to avoid waterfall from multiple emitters)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => loadThreads(), 500);
+      timer = setTimeout(() => loadThreadsRef.current(), 500);
     };
     window.addEventListener("velo-sync-done", handler);
     return () => {
       window.removeEventListener("velo-sync-done", handler);
       if (timer) clearTimeout(timer);
     };
-  }, [loadThreads, activeAccountId, activeLabel]);
+  }, []);
 
   // Infinite scroll: load more when near bottom
   useEffect(() => {
