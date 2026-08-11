@@ -42,6 +42,7 @@ vi.mock("../imap/messageHelper", () => ({
 
 vi.mock("../db/messages", () => ({
   upsertMessage: vi.fn(),
+  getMessagesForThread: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../db/threads", () => ({
@@ -64,7 +65,7 @@ import {
   smtpTestConnection,
 } from "../imap/tauriCommands";
 import { findSpecialFolder } from "../imap/messageHelper";
-import { upsertMessage } from "../db/messages";
+import { upsertMessage, getMessagesForThread } from "../db/messages";
 import { upsertThread, setThreadLabels, getThreadLabelIds } from "../db/threads";
 
 const mockImapConfig = {
@@ -236,6 +237,40 @@ describe("ImapSmtpProvider", () => {
         [100, 200],
         "Archive",
       );
+    });
+
+    it("resolves the thread's messages when the caller passes no message IDs", async () => {
+      // Every UI call site invokes archiveThread(accountId, threadId, []) because
+      // the Gmail provider ignores messageIds and acts on the thread. IMAP needs
+      // UIDs, so an empty array used to produce no IMAP command at all: the move
+      // silently did nothing while the local DB recorded the thread as archived.
+      vi.mocked(findSpecialFolder).mockResolvedValue("Archive");
+      vi.mocked(imapListFolders).mockResolvedValue(archiveFolderList as never);
+      vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
+      vi.mocked(getMessagesForThread).mockResolvedValue([
+        { id: "imap-acc-1-INBOX-100" },
+        { id: "imap-acc-1-INBOX-200" },
+      ] as never);
+
+      await provider.archive("thread-1", []);
+
+      expect(getMessagesForThread).toHaveBeenCalledWith("acc-1", "thread-1");
+      expect(imapMoveMessages).toHaveBeenCalledWith(
+        mockImapConfig,
+        "INBOX",
+        [100, 200],
+        "Archive",
+      );
+    });
+
+    it("issues no IMAP command when the thread has no stored messages", async () => {
+      vi.mocked(findSpecialFolder).mockResolvedValue("Archive");
+      vi.mocked(imapListFolders).mockResolvedValue(archiveFolderList as never);
+      vi.mocked(getMessagesForThread).mockResolvedValue([] as never);
+
+      await provider.archive("thread-1", []);
+
+      expect(imapMoveMessages).not.toHaveBeenCalled();
     });
 
     it("skips messages already in Archive", async () => {

@@ -21,7 +21,7 @@ import {
 import { getAccount, type DbAccount } from "../db/accounts";
 import { findSpecialFolder } from "../imap/messageHelper";
 import { ensureFreshToken } from "../oauth/oauthTokenManager";
-import { upsertMessage } from "../db/messages";
+import { upsertMessage, getMessagesForThread } from "../db/messages";
 import { upsertThread, setThreadLabels, getThreadLabelIds } from "../db/threads";
 
 /**
@@ -270,7 +270,9 @@ export class ImapSmtpProvider implements EmailProvider {
     _messageIds: string[],
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
 
     // Resolve the Archive folder: the \Archive special-use first, then common
     // Hostinger/cPanel layouts (INBOX.Archive / Archive / INBOX.Archives).
@@ -328,7 +330,9 @@ export class ImapSmtpProvider implements EmailProvider {
     _messageIds: string[],
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
     const trashFolder = await this.resolveSpecialFolder(config, "\\Trash", [
       "INBOX.Trash",
       "Trash",
@@ -352,7 +356,9 @@ export class ImapSmtpProvider implements EmailProvider {
     _messageIds: string[],
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
 
     for (const [folder, uids] of grouped) {
       await imapDeleteMessages(config, folder, uids);
@@ -365,7 +371,9 @@ export class ImapSmtpProvider implements EmailProvider {
     read: boolean,
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
 
     for (const [folder, uids] of grouped) {
       await imapSetFlags(config, folder, uids, ["Seen"], read);
@@ -378,7 +386,9 @@ export class ImapSmtpProvider implements EmailProvider {
     starred: boolean,
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
 
     for (const [folder, uids] of grouped) {
       await imapSetFlags(config, folder, uids, ["Flagged"], starred);
@@ -391,7 +401,9 @@ export class ImapSmtpProvider implements EmailProvider {
     isSpam: boolean,
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
     let destination: string;
     if (isSpam) {
       const junkFolder = await this.resolveSpecialFolder(config, "\\Junk", [
@@ -422,7 +434,9 @@ export class ImapSmtpProvider implements EmailProvider {
     folderPath: string,
   ): Promise<void> {
     const config = await this.getImapConfig();
-    const grouped = this.groupByFolder(_messageIds);
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, _messageIds),
+    );
 
     for (const [folder, uids] of grouped) {
       if (folder === folderPath) continue;
@@ -676,6 +690,28 @@ export class ImapSmtpProvider implements EmailProvider {
   }
 
   // ---- Helpers ----
+
+  /**
+   * Resolve the message IDs a thread-level action should operate on.
+   *
+   * Callers throughout the UI invoke archive/trash/move with an empty
+   * messageIds array, because the Gmail provider ignores the argument entirely
+   * and acts on the thread. IMAP has no thread concept and needs UIDs, so an
+   * empty array previously produced an empty folder grouping, no IMAP command,
+   * and a silent success — leaving the message on the server while the local
+   * database recorded it as archived. Fall back to the thread's stored messages
+   * so thread-level actions reach the server.
+   */
+  private async resolveMessageIds(
+    threadId: string,
+    messageIds: string[],
+  ): Promise<string[]> {
+    if (messageIds.length > 0) return messageIds;
+    if (!threadId) return [];
+
+    const messages = await getMessagesForThread(this.accountId, threadId);
+    return messages.map((m) => m.id);
+  }
 
   /**
    * Parse IMAP message IDs and group UIDs by folder.
