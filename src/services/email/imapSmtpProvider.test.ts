@@ -45,6 +45,10 @@ vi.mock("../db/messages", () => ({
   getMessagesForThread: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("../db/labels", () => ({
+  getLabelsForAccount: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("../db/threads", () => ({
   upsertThread: vi.fn(),
   setThreadLabels: vi.fn(),
@@ -66,6 +70,7 @@ import {
 } from "../imap/tauriCommands";
 import { findSpecialFolder } from "../imap/messageHelper";
 import { upsertMessage, getMessagesForThread } from "../db/messages";
+import { getLabelsForAccount } from "../db/labels";
 import { upsertThread, setThreadLabels, getThreadLabelIds } from "../db/threads";
 
 const mockImapConfig = {
@@ -818,6 +823,80 @@ describe("ImapSmtpProvider", () => {
 
       expect(imapDeleteMessages).not.toHaveBeenCalled();
       spy.mockRestore();
+    });
+  });
+
+  describe("addLabel / removeLabel", () => {
+    const folderLabel = {
+      id: "archive",
+      account_id: "acc-1",
+      name: "Archive",
+      type: "system",
+      color_bg: null,
+      color_fg: null,
+      visible: 1,
+      sort_order: 0,
+      imap_folder_path: "INBOX.Archive",
+      imap_special_use: null,
+    };
+    const flagLabel = { ...folderLabel, id: "UNREAD", name: "Unread", imap_folder_path: null };
+
+    beforeEach(() => {
+      vi.mocked(getMessagesForThread).mockResolvedValue([
+        { id: "imap-acc-1-INBOX-211" },
+      ] as never);
+      vi.mocked(imapMoveMessages).mockResolvedValue(undefined);
+    });
+
+    it("moves the thread into the folder backing the label", async () => {
+      // The UI dispatches addLabel for "move to <folder>". This used to be a
+      // no-op that only warned, so the message stayed in the inbox on the server
+      // while the local database showed it as moved.
+      vi.mocked(getLabelsForAccount).mockResolvedValue([folderLabel] as never);
+
+      await provider.addLabel("thread-1", "archive");
+
+      expect(imapMoveMessages).toHaveBeenCalledWith(
+        mockImapConfig,
+        "INBOX",
+        [211],
+        "INBOX.Archive",
+      );
+    });
+
+    it("does not move anything for flag-backed labels like UNREAD", async () => {
+      vi.mocked(getLabelsForAccount).mockResolvedValue([flagLabel] as never);
+
+      await provider.addLabel("thread-1", "UNREAD");
+
+      expect(imapMoveMessages).not.toHaveBeenCalled();
+    });
+
+    it("does not move when the message is already in the target folder", async () => {
+      vi.mocked(getLabelsForAccount).mockResolvedValue([folderLabel] as never);
+      vi.mocked(getMessagesForThread).mockResolvedValue([
+        { id: "imap-acc-1-INBOX.Archive-211" },
+      ] as never);
+
+      await provider.addLabel("thread-1", "archive");
+
+      expect(imapMoveMessages).not.toHaveBeenCalled();
+    });
+
+    it("moves back to INBOX when a folder-backed label is removed", async () => {
+      vi.mocked(getLabelsForAccount).mockResolvedValue([folderLabel] as never);
+      vi.mocked(getMessagesForThread).mockResolvedValue([
+        { id: "imap-acc-1-INBOX.Archive-211" },
+      ] as never);
+
+      await provider.removeLabel("thread-1", "archive");
+
+      expect(imapMoveMessages).toHaveBeenCalledWith(
+        mockImapConfig,
+        "INBOX.Archive",
+        [211],
+        "INBOX",
+      );
     });
   });
 });

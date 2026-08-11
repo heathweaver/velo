@@ -19,6 +19,7 @@ import {
   type SmtpConfig,
 } from "../imap/tauriCommands";
 import { getAccount, type DbAccount } from "../db/accounts";
+import { getLabelsForAccount } from "../db/labels";
 import { findSpecialFolder } from "../imap/messageHelper";
 import { ensureFreshToken } from "../oauth/oauthTokenManager";
 import { upsertMessage, getMessagesForThread } from "../db/messages";
@@ -444,28 +445,68 @@ export class ImapSmtpProvider implements EmailProvider {
     }
   }
 
-  async addLabel(
-    _threadId: string,
-    _labelId: string,
-  ): Promise<void> {
-    // IMAP doesn't have native labels — this would require COPY to another folder
-    // or using IMAP keywords (if server supports them).
-    // For now, this is a no-op with a warning.
-    console.warn(
-      "IMAP does not natively support labels. " +
-        "Use moveToFolder() to move messages between folders instead.",
+  /**
+   * IMAP has no native labels, but Velo's labels are already backed by real
+   * folders: every label carries the imap_folder_path it was discovered from.
+   * Applying a label therefore means moving the thread's messages into that
+   * folder, which is what the UI's "move to <label>" already implies and what
+   * makes the change visible in other clients.
+   *
+   * Labels with no folder behind them (UNREAD, STARRED — server flags, handled
+   * by markRead/star) are left alone.
+   */
+  async addLabel(_threadId: string, _labelId: string): Promise<void> {
+    const target = await this.folderForLabel(_labelId);
+    if (!target) return;
+
+    const config = await this.getImapConfig();
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, []),
     );
+
+    for (const [folder, uids] of grouped) {
+      if (folder === target) continue;
+      await imapMoveMessages(config, folder, uids, target);
+    }
   }
 
-  async removeLabel(
-    _threadId: string,
-    _labelId: string,
-  ): Promise<void> {
-    // IMAP doesn't have native labels.
-    console.warn(
-      "IMAP does not natively support labels. " +
-        "Use moveToFolder() to move messages between folders instead.",
+  /**
+   * Resolve a label id to the IMAP folder backing it, or null when the label is
+   * a server flag rather than a folder.
+   */
+  private async folderForLabel(labelId: string): Promise<string | null> {
+    const labels = await getLabelsForAccount(this.accountId);
+    const label = labels.find((l) => l.id === labelId);
+
+    if (!label) {
+      console.warn(`[imap] unknown label ${labelId}; not moving anything`);
+      return null;
+    }
+    if (!label.imap_folder_path) {
+      // UNREAD/STARRED and similar are flags, not folders.
+      return null;
+    }
+    return label.imap_folder_path;
+  }
+
+  /**
+   * Removing a folder-backed label means the thread should no longer live in
+   * that folder, so move it back to INBOX. Only messages currently sitting in
+   * the label's folder are touched.
+   */
+  async removeLabel(_threadId: string, _labelId: string): Promise<void> {
+    const source = await this.folderForLabel(_labelId);
+    if (!source || source === "INBOX") return;
+
+    const config = await this.getImapConfig();
+    const grouped = this.groupByFolder(
+      await this.resolveMessageIds(_threadId, []),
     );
+
+    const uids = grouped.get(source);
+    if (!uids?.length) return;
+
+    await imapMoveMessages(config, source, uids, "INBOX");
   }
 
   // ---- Send/Draft operations ----
