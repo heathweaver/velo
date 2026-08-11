@@ -1,7 +1,7 @@
 import { getSetting, getSecureSetting } from "@/services/db/settings";
 import { AiError } from "./errors";
 import type { AiProvider, AiProviderClient } from "./types";
-import { DEFAULT_MODELS, MODEL_SETTINGS } from "./types";
+import { DEFAULT_MODELS, MODEL_SETTINGS, PROVIDER_MODELS } from "./types";
 import { createClaudeProvider, clearClaudeProvider } from "./providers/claudeProvider";
 import { createOpenAIProvider, clearOpenAIProvider } from "./providers/openaiProvider";
 import { createGeminiProvider, clearGeminiProvider } from "./providers/geminiProvider";
@@ -16,6 +16,21 @@ const API_KEY_SETTINGS: Record<Exclude<AiProvider, "ollama">, string> = {
 };
 
 let cachedProvider: { name: AiProvider; key: string; client: AiProviderClient } | null = null;
+
+/**
+ * Pick the model to run with, ignoring a stored one the provider no longer
+ * serves.
+ *
+ * These providers are chosen from a fixed list — there is no free-text model
+ * field — so a stored value outside that list is one a previous version of Velo
+ * offered and the provider has since retired. Left alone it would 404 on every
+ * call, and the AI features would stay dead until the user happened to open
+ * settings and re-pick.
+ */
+function resolveModel(provider: Exclude<AiProvider, "ollama">, stored: string | null): string {
+  if (stored && PROVIDER_MODELS[provider].some((m) => m.id === stored)) return stored;
+  return DEFAULT_MODELS[provider];
+}
 
 export async function getActiveProviderName(): Promise<AiProvider> {
   const setting = await getSetting("ai_provider");
@@ -47,7 +62,7 @@ export async function getActiveProvider(): Promise<AiProviderClient> {
     throw new AiError("NOT_CONFIGURED", `${providerName} API key not configured`);
   }
 
-  const model = (await getSetting(MODEL_SETTINGS[providerName])) ?? DEFAULT_MODELS[providerName];
+  const model = resolveModel(providerName, await getSetting(MODEL_SETTINGS[providerName]));
   const cacheKey = `${apiKey}|${model}`;
 
   if (cachedProvider && cachedProvider.name === providerName && cachedProvider.key === cacheKey) {

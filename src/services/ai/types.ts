@@ -12,9 +12,11 @@ export interface AiProviderClient {
 }
 
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
-  claude: "claude-haiku-4-5-20251001",
-  openai: "gpt-4o-mini",
-  gemini: "gemini-2.5-flash-preview-05-20",
+  // The defaults are the cheapest model each provider offers: everything here
+  // is short classification and extraction work, not reasoning.
+  claude: "claude-haiku-4-5",
+  openai: "gpt-5.6-luna",
+  gemini: "gemini-3.5-flash-lite",
   ollama: "llama3.2",
   copilot: "openai/gpt-4o-mini",
 };
@@ -25,21 +27,22 @@ export interface ModelOption {
 }
 
 export const PROVIDER_MODELS: Record<Exclude<AiProvider, "ollama">, ModelOption[]> = {
+  // Aliases rather than dated snapshots, so a model revision does not strand
+  // anyone on a retired ID.
   claude: [
-    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-    { id: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-    { id: "claude-opus-4-20250514", label: "Claude Opus 4" },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    { id: "claude-opus-5", label: "Claude Opus 5" },
   ],
   openai: [
-    { id: "gpt-4o-mini", label: "GPT-4o Mini" },
-    { id: "gpt-4o", label: "GPT-4o" },
-    { id: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
-    { id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
-    { id: "gpt-4.1", label: "GPT-4.1" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
   ],
   gemini: [
-    { id: "gemini-2.5-flash-preview-05-20", label: "Gemini 2.5 Flash" },
-    { id: "gemini-2.5-pro-preview-05-06", label: "Gemini 2.5 Pro" },
+    { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite" },
+    { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
   ],
   copilot: [
     { id: "openai/gpt-4o-mini", label: "GPT-4o Mini (Low)" },

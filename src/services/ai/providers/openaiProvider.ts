@@ -6,6 +6,15 @@ const factory = createProviderFactory(
   (apiKey) => new OpenAI({ apiKey, dangerouslyAllowBrowser: true }),
 );
 
+/**
+ * `max_tokens` is deprecated on chat completions and rejected outright by the
+ * reasoning models, which is every current OpenAI model. Its replacement,
+ * `max_completion_tokens`, covers reasoning tokens as well as visible output,
+ * so the old 1024 could be spent entirely on reasoning and return an empty
+ * string; the budget is raised to leave room for the answer.
+ */
+const DEFAULT_MAX_COMPLETION_TOKENS = 8192;
+
 export function createOpenAIProvider(apiKey: string, model: string): AiProviderClient {
   const client = factory.getClient(apiKey);
 
@@ -13,7 +22,7 @@ export function createOpenAIProvider(apiKey: string, model: string): AiProviderC
     async complete(req: AiCompletionRequest): Promise<string> {
       const response = await client.chat.completions.create({
         model,
-        max_tokens: req.maxTokens ?? 1024,
+        max_completion_tokens: req.maxTokens ?? DEFAULT_MAX_COMPLETION_TOKENS,
         messages: [
           { role: "system", content: req.systemPrompt },
           { role: "user", content: req.userContent },
@@ -27,7 +36,9 @@ export function createOpenAIProvider(apiKey: string, model: string): AiProviderC
       try {
         await client.chat.completions.create({
           model,
-          max_tokens: 10,
+          // Reasoning tokens count against this budget, so a 10-token ceiling
+          // would fail the connection test on every current model.
+          max_completion_tokens: 512,
           messages: [{ role: "user", content: "Say hi" }],
         });
         return true;

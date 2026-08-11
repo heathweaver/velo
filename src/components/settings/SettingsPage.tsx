@@ -4,7 +4,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { navigateToLabel, navigateToSettings } from "@/router/navigate";
 import { useAccountStore } from "@/stores/accountStore";
 import { getSetting, setSetting, getSecureSetting, setSecureSetting } from "@/services/db/settings";
-import { PROVIDER_MODELS } from "@/services/ai/types";
+import { DEFAULT_MODELS, PROVIDER_MODELS } from "@/services/ai/types";
 import { deleteAccount } from "@/services/db/accounts";
 import { removeClient, reauthorizeAccount } from "@/services/gmail/tokenManager";
 import { triggerSync, forceFullSync, resyncAccount } from "@/services/gmail/syncManager";
@@ -133,11 +133,13 @@ export function SettingsPage() {
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [copilotApiKey, setCopilotApiKey] = useState("");
   const [ollamaServerUrl, setOllamaServerUrl] = useState("http://localhost:11434");
-  const [ollamaModel, setOllamaModel] = useState("llama3.2");
-  const [claudeModel, setClaudeModel] = useState("claude-haiku-4-5-20251001");
-  const [openaiModel, setOpenaiModel] = useState("gpt-4o-mini");
-  const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash-preview-05-20");
-  const [copilotModel, setCopilotModel] = useState("openai/gpt-4o-mini");
+  // Read the defaults from one place: these used to be copied literals, so a
+  // model list update left the settings screen offering a retired model.
+  const [ollamaModel, setOllamaModel] = useState(DEFAULT_MODELS.ollama);
+  const [claudeModel, setClaudeModel] = useState(DEFAULT_MODELS.claude);
+  const [openaiModel, setOpenaiModel] = useState(DEFAULT_MODELS.openai);
+  const [geminiModel, setGeminiModel] = useState(DEFAULT_MODELS.gemini);
+  const [copilotModel, setCopilotModel] = useState(DEFAULT_MODELS.copilot);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiAutoCategorize, setAiAutoCategorize] = useState(true);
   const [aiAutoSummarize, setAiAutoSummarize] = useState(true);
