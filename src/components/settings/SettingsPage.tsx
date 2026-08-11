@@ -45,6 +45,7 @@ import { ContactEditor } from "./ContactEditor";
 import { SubscriptionManager } from "./SubscriptionManager";
 import { SmartFolderEditor } from "./SmartFolderEditor";
 import { QuickStepEditor } from "./QuickStepEditor";
+import { CategoryEditor } from "./CategoryEditor";
 import { SmartLabelEditor } from "./SmartLabelEditor";
 import { SHORTCUTS, getDefaultKeyMap } from "@/constants/shortcuts";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -811,6 +812,17 @@ export function SettingsPage() {
                       Create, rename, recolor, delete, or reorder your Gmail labels.
                     </p>
                     <LabelEditor />
+                  </Section>
+
+                  <Section title="Categories">
+                    <p className="text-xs text-text-tertiary mb-3">
+                      Categories split your inbox into tabs. They are local to
+                      Velo — nothing is written back to the mail server — and the
+                      description you give each one is what the AI uses to sort
+                      incoming mail, so they are yours to define rather than a
+                      copy of Gmail's tabs.
+                    </p>
+                    <CategoryEditor />
                   </Section>
 
                   <Section title="Filters">
