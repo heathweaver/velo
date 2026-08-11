@@ -58,6 +58,17 @@ import {
 import { ALL_NAV_ITEMS } from "@/components/layout/Sidebar";
 import type { SidebarNavItem } from "@/stores/uiStore";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+
+/**
+ * How far back a sync period reaches, for comparing two settings.
+ * "0" means everything, so it sorts above every finite window.
+ */
+function syncWindowWidth(value: string): number {
+  const days = parseInt(value, 10);
+  if (Number.isNaN(days)) return 0;
+  return days <= 0 ? Number.POSITIVE_INFINITY : days;
+}
 import { TextField } from "@/components/ui/TextField";
 import appIcon from "@/assets/icon.png";
 
@@ -93,6 +104,8 @@ export function SettingsPage() {
   const sendAndArchive = useUIStore((s) => s.sendAndArchive);
   const setSendAndArchive = useUIStore((s) => s.setSendAndArchive);
   const inboxViewMode = useUIStore((s) => s.inboxViewMode);
+  const [showResyncPrompt, setShowResyncPrompt] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
   const unifiedInbox = useUIStore((s) => s.unifiedInbox);
   const setUnifiedInbox = useUIStore((s) => s.setUnifiedInbox);
   const setInboxViewMode = useUIStore((s) => s.setInboxViewMode);
@@ -1021,8 +1034,15 @@ export function SettingsPage() {
                         value={syncPeriodDays}
                         onChange={async (e) => {
                           const val = e.target.value;
+                          const widening =
+                            syncWindowWidth(val) > syncWindowWidth(syncPeriodDays);
                           setSyncPeriodDays(val);
                           await setSetting("sync_period_days", val);
+                          // Widening the window has no effect on its own: delta
+                          // sync only asks for UIDs above the last one seen, and
+                          // older mail has lower UIDs. Offer the re-sync that
+                          // actually fetches it.
+                          if (widening) setShowResyncPrompt(true);
                         }}
                         className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
@@ -1030,6 +1050,7 @@ export function SettingsPage() {
                         <option value="90">Last 90 days</option>
                         <option value="180">Last 180 days</option>
                         <option value="365">Last 1 year</option>
+                        <option value="0">All emails</option>
                       </select>
                     </SettingRow>
                     <p className="text-xs text-text-tertiary">
@@ -1409,6 +1430,31 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={showResyncPrompt}
+        onClose={() => setShowResyncPrompt(false)}
+        onConfirm={async () => {
+          setResyncing(true);
+          try {
+            const activeIds = useAccountStore
+              .getState()
+              .accounts.filter((a) => a.isActive)
+              .map((a) => a.id);
+            if (activeIds.length > 0) await forceFullSync(activeIds);
+          } catch (err) {
+            console.error("Re-sync after widening the sync window failed:", err);
+          } finally {
+            setResyncing(false);
+            setShowResyncPrompt(false);
+          }
+        }}
+        title="Fetch older mail?"
+        message="Widening the sync window does not fetch older messages on its own — syncing only asks the server for mail newer than what you already have. A full re-sync downloads the extra history now. It can take a while on a large mailbox, and you can do it later from this screen instead."
+        confirmLabel="Re-sync now"
+        cancelLabel="Not now"
+        loading={resyncing}
+      />
     </div>
   );
 }

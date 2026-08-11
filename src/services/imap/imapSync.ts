@@ -96,8 +96,12 @@ export function formatImapDate(date: Date): string {
  * Compute a `DD-Mon-YYYY` SINCE date string for the given `daysBack` value.
  * Subtracts an extra day as a safety margin for timezone differences
  * (IMAP SINCE has date-only granularity, no time component).
+ *
+ * Returns null for a non-positive `daysBack`, meaning "no date restriction" —
+ * the search then uses ALL and every message in the folder is considered.
  */
-export function computeSinceDate(daysBack: number): string {
+export function computeSinceDate(daysBack: number): string | null {
+  if (daysBack <= 0) return null;
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - daysBack - 1);
   return formatImapDate(date);
@@ -488,7 +492,11 @@ export async function imapInitialSync(
       if (uidsToFetch.length === 0) continue;
 
       // Date filter config
-      const cutoffDate = Math.floor(Date.now() / 1000) - daysBack * 86400;
+      // Negative infinity when syncing everything, so nothing is filtered out.
+      const cutoffDate =
+        daysBack <= 0
+          ? Number.NEGATIVE_INFINITY
+          : Math.floor(Date.now() / 1000) - daysBack * 86400;
       const nowSeconds = Math.floor(Date.now() / 1000);
       let dateFallbackCount = 0;
       let folderFetchedCount = 0;

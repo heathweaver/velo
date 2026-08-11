@@ -54,7 +54,10 @@ async function syncGmailAccount(accountId: string): Promise<void> {
   }
 
   const syncPeriodStr = await getSetting("sync_period_days");
-  const syncDays = parseInt(syncPeriodStr ?? "30", 10) || 30;
+  // 0 means "everything" and must survive parsing — `|| 30` would turn it back
+  // into a 30-day window because 0 is falsy.
+  const parsedSyncDays = parseInt(syncPeriodStr ?? "30", 10);
+  const syncDays = Number.isNaN(parsedSyncDays) ? 30 : parsedSyncDays;
 
   if (account.history_id) {
     // Delta sync
@@ -95,7 +98,10 @@ async function syncImapAccount(accountId: string): Promise<void> {
   }
 
   const syncPeriodStr = await getSetting("sync_period_days");
-  const syncDays = parseInt(syncPeriodStr ?? "30", 10) || 30;
+  // 0 means "everything" and must survive parsing — `|| 30` would turn it back
+  // into a 30-day window because 0 is falsy.
+  const parsedSyncDays = parseInt(syncPeriodStr ?? "30", 10);
+  const syncDays = Number.isNaN(parsedSyncDays) ? 30 : parsedSyncDays;
 
   if (account.history_id) {
     // Delta sync — IMAP uses folder-level UID tracking
@@ -345,6 +351,11 @@ export async function triggerSync(accountIds: string[]): Promise<void> {
 export async function forceFullSync(accountIds: string[]): Promise<void> {
   for (const id of accountIds) {
     await clearAccountHistoryId(id);
+    // IMAP delta sync asks for UIDs above the last one seen per folder, so
+    // clearing only the history id would still leave older messages
+    // unreachable — lower UIDs are never requested. Dropping the folder state
+    // forces a fresh SINCE/ALL search over every folder.
+    await clearAllFolderSyncStates(id);
   }
   await runSync(accountIds);
 }

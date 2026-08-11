@@ -617,11 +617,19 @@ describe("computeSinceDate", () => {
   });
 
   it("adds 1-day safety margin", () => {
-    // For daysBack=0, should still go back 1 day
-    const result = computeSinceDate(0);
-    const yesterday = new Date();
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    expect(result).toBe(formatImapDate(yesterday));
+    // IMAP SINCE is date-only, so a day of slack covers timezone differences.
+    const result = computeSinceDate(1);
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setUTCDate(twoDaysAgo.getUTCDate() - 2);
+    expect(result).toBe(formatImapDate(twoDaysAgo));
+  });
+
+  it("returns null for a non-positive window, meaning no date restriction", () => {
+    // 0 is the "All emails" setting: the search falls back to ALL rather than
+    // SINCE, so nothing is excluded by date. Previously 0 was unreachable —
+    // parseInt(...) || 30 turned it back into a 30-day window.
+    expect(computeSinceDate(0)).toBeNull();
+    expect(computeSinceDate(-1)).toBeNull();
   });
 });
 
