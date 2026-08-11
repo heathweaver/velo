@@ -6,14 +6,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/stores/uiStore", () => ({
   useUIStore: { getState: () => ({ inboxViewMode: "unified", toggleSidebar: vi.fn() }) },
 }));
+export const mockSelectThreadRange = vi.fn();
+export const mockThreadState: {
+  threads: { id: string }[];
+  selectedThreadIds: Set<string>;
+} = { threads: [], selectedThreadIds: new Set() };
+
 vi.mock("@/stores/threadStore", () => ({
   // Mirrors the real helper: without the thread in the map it returns the
   // account passed in, which is what these single-account tests expect.
   accountIdForThread: (_threadId: string, fallback: string | null) => fallback,
   useThreadStore: {
     getState: () => ({
-      threads: [],
-      selectedThreadIds: new Set(),
+      threads: mockThreadState.threads,
+      selectedThreadIds: mockThreadState.selectedThreadIds,
+      selectThreadRange: mockSelectThreadRange,
       removeThread: vi.fn(),
       removeThreads: vi.fn(),
       updateThread: vi.fn(),
@@ -123,5 +130,60 @@ describe("useKeyboardShortcuts", () => {
     expect(listener).toHaveBeenCalledTimes(1);
 
     window.removeEventListener("velo-toggle-shortcuts-help", listener);
+  });
+
+  describe("shift+arrow range selection", () => {
+    beforeEach(() => {
+      mockThreadState.threads = [
+        { id: "t1" }, { id: "t2" }, { id: "t3" }, { id: "t4" },
+      ];
+      mockThreadState.selectedThreadIds = new Set();
+      mockSelectThreadRange.mockClear();
+    });
+
+    it("extends the selection downward from the current edge", () => {
+      // Shift+click could build a range but the keyboard could not, so a
+      // selection had to be started with the mouse.
+      mockThreadState.selectedThreadIds = new Set(["t2"]);
+      renderHook(() => useKeyboardShortcuts());
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
+      );
+
+      expect(mockSelectThreadRange).toHaveBeenCalledWith("t3");
+    });
+
+    it("extends upward from the current edge", () => {
+      mockThreadState.selectedThreadIds = new Set(["t3"]);
+      renderHook(() => useKeyboardShortcuts());
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowUp", shiftKey: true, bubbles: true }),
+      );
+
+      expect(mockSelectThreadRange).toHaveBeenCalledWith("t2");
+    });
+
+    it("stops at the end of the list rather than wrapping", () => {
+      mockThreadState.selectedThreadIds = new Set(["t4"]);
+      renderHook(() => useKeyboardShortcuts());
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
+      );
+
+      expect(mockSelectThreadRange).toHaveBeenCalledWith("t4");
+    });
+
+    it("starts a selection at the first thread when nothing is selected", () => {
+      renderHook(() => useKeyboardShortcuts());
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
+      );
+
+      expect(mockSelectThreadRange).toHaveBeenCalledWith("t1");
+    });
   });
 });

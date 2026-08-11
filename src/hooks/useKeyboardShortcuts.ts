@@ -9,7 +9,6 @@ import { navigateToLabel, navigateToThread, navigateBack, getActiveLabel, getSel
 import { archiveThread, trashThread, permanentDeleteThread, starThread, spamThread } from "@/services/emailActions";
 import { deleteThread as deleteThreadFromDb, pinThread as pinThreadDb, unpinThread as unpinThreadDb, muteThread as muteThreadDb, unmuteThread as unmuteThreadDb } from "@/services/db/threads";
 import { deleteDraftsForThread } from "@/services/gmail/draftDeletion";
-import { getGmailClient } from "@/services/gmail/tokenManager";
 import { getMessagesForThread } from "@/services/db/messages";
 import { parseUnsubscribeUrl } from "@/components/email/MessageItem";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -164,6 +163,33 @@ export function useKeyboardShortcuts() {
         pendingTimerRef.current = setTimeout(() => {
           pendingKeyRef.current = null;
         }, 1000);
+        return;
+      }
+
+      // Shift+Arrow extends the selection, matching shift+click. Without this
+      // the arrow keys only move the cursor, so a range could be selected with
+      // the mouse but not the keyboard.
+      if ((key === "ArrowDown" || key === "ArrowUp") && e.shiftKey) {
+        e.preventDefault();
+        const { threads, selectedThreadIds, selectThreadRange } =
+          useThreadStore.getState();
+        if (threads.length === 0) return;
+
+        // Extend from the far edge of the current selection so repeated presses
+        // keep growing it; the anchor stays wherever the selection started.
+        const edgeId = [...selectedThreadIds].pop() ?? getSelectedThreadId();
+        const edgeIdx = edgeId ? threads.findIndex((t) => t.id === edgeId) : -1;
+        if (edgeIdx === -1) {
+          selectThreadRange(threads[0]!.id);
+          return;
+        }
+
+        const nextIdx =
+          key === "ArrowDown"
+            ? Math.min(edgeIdx + 1, threads.length - 1)
+            : Math.max(edgeIdx - 1, 0);
+        const target = threads[nextIdx];
+        if (target) selectThreadRange(target.id);
         return;
       }
 
@@ -323,8 +349,7 @@ async function executeAction(actionId: string): Promise<void> {
             await deleteThreadFromDb(activeAccountId, id);
           } else if (isDraftsView) {
             try {
-              const client = await getGmailClient(activeAccountId);
-              await deleteDraftsForThread(client, activeAccountId, id);
+              await deleteDraftsForThread(accountIdForThread(id, activeAccountId)!, id);
               useThreadStore.getState().removeThread(id);
             } catch (err) {
               console.error("Draft delete failed:", err);
@@ -339,8 +364,7 @@ async function executeAction(actionId: string): Promise<void> {
           await deleteThreadFromDb(activeAccountId, selectedId);
         } else if (isDraftsView) {
           try {
-            const client = await getGmailClient(activeAccountId);
-            await deleteDraftsForThread(client, activeAccountId, selectedId);
+            await deleteDraftsForThread(accountIdForThread(selectedId, activeAccountId)!, selectedId);
             useThreadStore.getState().removeThread(selectedId);
           } catch (err) {
             console.error("Draft delete failed:", err);
