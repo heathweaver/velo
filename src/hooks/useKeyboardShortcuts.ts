@@ -502,6 +502,9 @@ async function executeAction(actionId: string): Promise<void> {
     case "app.toggleSidebar":
       useUIStore.getState().toggleSidebar();
       break;
+    case "app.toggleContactSidebar":
+      useUIStore.getState().toggleContactSidebar();
+      break;
     case "app.askInbox":
       window.dispatchEvent(new Event("velo-toggle-ask-inbox"));
       break;
