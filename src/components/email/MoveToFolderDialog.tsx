@@ -225,6 +225,21 @@ export function MoveToFolderDialog({
     [filtered, selectedIdx, handleSelect, onClose],
   );
 
+  // Escape at the document level, not just inside the dialog. The dialog's own
+  // keydown only fires while focus is within it, so any interaction that moved
+  // focus elsewhere left the dialog with no keyboard exit.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [isOpen, onClose]);
+
   const scrollToIndex = (index: number) => {
     const list = listRef.current;
     if (!list) return;
@@ -254,11 +269,20 @@ export function MoveToFolderDialog({
       <div
         ref={overlayRef}
         className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
       >
-        <div className="glass-backdrop absolute inset-0" />
+        {/*
+          The dismiss handler belongs on the backdrop itself. It is absolutely
+          positioned over the whole overlay, so a click on empty space lands
+          here rather than on the container — a target/currentTarget check on
+          the parent never matched, and clicking outside did nothing. With
+          Escape bound to the dialog's own keydown, losing focus to the backdrop
+          left no way out at all.
+        */}
+        <div
+          className="glass-backdrop absolute inset-0"
+          onClick={onClose}
+          aria-hidden="true"
+        />
         <div
           className="relative bg-bg-primary border border-border-primary rounded-lg glass-modal w-full max-w-md overflow-hidden"
           onKeyDown={handleKeyDown}

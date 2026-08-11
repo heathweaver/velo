@@ -193,22 +193,51 @@ describe("MoveToFolderDialog", () => {
     expect(archiveThread).toHaveBeenCalledWith("acc-1", "thread-2", []);
   });
 
-  it("closes when clicking the backdrop", () => {
-    const { container } = render(<MoveToFolderDialog {...defaultProps} />);
-
-    // The overlay div is the backdrop
-    const overlay = container.querySelector(".fixed.inset-0");
-    if (overlay) {
-      fireEvent.click(overlay);
-      expect(defaultProps.onClose).toHaveBeenCalled();
-    }
-  });
-
   it("renders keyboard hint footer", () => {
     render(<MoveToFolderDialog {...defaultProps} />);
 
     expect(screen.getByText("navigate")).toBeInTheDocument();
     expect(screen.getByText("select")).toBeInTheDocument();
     expect(screen.getByText("close")).toBeInTheDocument();
+  });
+
+  describe("dismissing", () => {
+    it("closes when the backdrop is clicked", () => {
+      // The backdrop is absolutely positioned over the whole overlay, so a
+      // click on empty space lands on it rather than on its parent. The
+      // dismiss handler used to sit on the parent behind a
+      // target===currentTarget check, which never matched — clicking outside
+      // did nothing at all.
+      const onClose = vi.fn();
+      const { container } = render(
+        <MoveToFolderDialog {...defaultProps} onClose={onClose} />,
+      );
+
+      const backdrop = container.querySelector(".glass-backdrop");
+      expect(backdrop).not.toBeNull();
+      fireEvent.click(backdrop!);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes on Escape even when focus is outside the dialog", () => {
+      // Escape was bound to the dialog's own keydown, so once focus moved away
+      // — clicking the backdrop was enough — there was no keyboard exit either.
+      const onClose = vi.fn();
+      render(<MoveToFolderDialog {...defaultProps} onClose={onClose} />);
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("does not close on Escape once dismissed", () => {
+      const onClose = vi.fn();
+      render(<MoveToFolderDialog {...defaultProps} isOpen={false} onClose={onClose} />);
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(onClose).not.toHaveBeenCalled();
+    });
   });
 });
