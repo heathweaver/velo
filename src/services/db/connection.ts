@@ -5,6 +5,15 @@ let db: Database | null = null;
 export async function getDb(): Promise<Database> {
   if (!db) {
     db = await Database.load("sqlite:velo.db");
+    // journal_mode is persisted in the database file, so this applies to every
+    // pooled connection. busy_timeout and synchronous are per-connection, and
+    // each execute() checks out an arbitrary connection from the Rust-side pool,
+    // so these two only take effect on whichever connection serves them here.
+    // They are best-effort; sqlx already defaults every connection to a 5s
+    // busy_timeout, which is what actually bounds lock waits.
+    await db.execute("PRAGMA journal_mode=WAL");
+    await db.execute("PRAGMA busy_timeout=15000");
+    await db.execute("PRAGMA synchronous=NORMAL");
   }
   return db;
 }
@@ -62,20 +71,11 @@ export async function withTransaction(fn: (db: Database) => Promise<void>): Prom
 
   const database = await getDb();
   try {
-    await database.execute("BEGIN TRANSACTION", []);
-    try {
-      await fn(database);
-      await database.execute("COMMIT", []);
-    } catch (err) {
-      // SQLite may auto-rollback on certain errors — guard against
-      // "cannot rollback - no transaction is active"
-      try {
-        await database.execute("ROLLBACK", []);
-      } catch {
-        // ROLLBACK failed (already rolled back) — safe to ignore
-      }
-      throw err;
-    }
+    // Note: Do NOT use explicit BEGIN/COMMIT here. tauri-plugin-sql maintains a 
+    // connection pool in Rust. Executing raw transaction statements can cause pool 
+    // deadlocks if subsequent queries check out a different connection.
+    // The JS `txQueue` guarantees sequential execution of this block.
+    await fn(database);
   } finally {
     resolve(); // always unblock the next queued transaction
   }
