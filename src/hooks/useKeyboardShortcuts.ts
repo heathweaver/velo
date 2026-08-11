@@ -5,7 +5,7 @@ import { useComposerStore } from "@/stores/composerStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
-import { navigateToLabel, navigateToThread, navigateBack, getActiveLabel, getSelectedThreadId } from "@/router/navigate";
+import { navigateToLabel, navigateToThread, navigateToSettings, navigateBack, getActiveLabel, getSelectedThreadId } from "@/router/navigate";
 import { archiveThread, trashThread, permanentDeleteThread, starThread, spamThread } from "@/services/emailActions";
 import { deleteThread as deleteThreadFromDb, pinThread as pinThreadDb, unpinThread as unpinThreadDb, muteThread as muteThreadDb, unmuteThread as unmuteThreadDb } from "@/services/db/threads";
 import { deleteDraftsForThread } from "@/services/gmail/draftDeletion";
@@ -477,6 +477,17 @@ async function executeAction(actionId: string): Promise<void> {
       }
       break;
     }
+    case "action.snooze": {
+      const multiSnoozeIds = useThreadStore.getState().selectedThreadIds;
+      const snoozeThreadIds =
+        multiSnoozeIds.size > 0 ? [...multiSnoozeIds] : selectedId ? [selectedId] : [];
+      if (snoozeThreadIds.length > 0) {
+        window.dispatchEvent(
+          new CustomEvent("velo-snooze", { detail: { threadIds: snoozeThreadIds } }),
+        );
+      }
+      break;
+    }
     case "action.moveToFolder": {
       const multiMoveIds = useThreadStore.getState().selectedThreadIds;
       const moveThreadIds = multiMoveIds.size > 0 ? [...multiMoveIds] : selectedId ? [selectedId] : [];
@@ -496,6 +507,9 @@ async function executeAction(actionId: string): Promise<void> {
       break;
     case "app.help":
       window.dispatchEvent(new Event("velo-toggle-shortcuts-help"));
+      break;
+    case "app.settings":
+      navigateToSettings();
       break;
     case "app.syncFolder": {
       if (activeAccountId) {

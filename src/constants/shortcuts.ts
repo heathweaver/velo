@@ -41,6 +41,7 @@ export const SHORTCUTS: ShortcutCategory[] = [
     { id: "action.pin", keys: "p", desc: "Pin / Unpin" },
     { id: "action.unsubscribe", keys: "u", desc: "Unsubscribe" },
     { id: "action.mute", keys: "m", desc: "Mute / Unmute" },
+    { id: "action.snooze", keys: "b", desc: "Snooze" },
     { id: "action.createTaskFromEmail", keys: "t", desc: "Create task from email (AI)" },
     { id: "action.moveToFolder", keys: "v", desc: "Move to folder/label" },
     { id: "action.selectAll", keys: "Ctrl+A", desc: "Select all" },
@@ -52,6 +53,8 @@ export const SHORTCUTS: ShortcutCategory[] = [
     { id: "app.send", keys: "Ctrl+Enter", desc: "Send email" },
     { id: "app.askInbox", keys: "i", desc: "Ask AI about your inbox" },
     { id: "app.help", keys: "?", desc: "Show keyboard shortcuts" },
+    // Ctrl here means Ctrl-or-Cmd, so this is the standard macOS Cmd+, .
+    { id: "app.settings", keys: "Ctrl+,", desc: "Open settings" },
     { id: "app.syncFolder", keys: "F5", desc: "Sync current folder" },
   ]},
 ];

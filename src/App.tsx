@@ -27,6 +27,7 @@ import { initializeClients } from "./services/gmail/tokenManager";
 import {
   startSnoozeChecker,
   stopSnoozeChecker,
+  snoozeThread,
 } from "./services/snooze/snoozeManager";
 import {
   startScheduledSendChecker,
@@ -70,6 +71,7 @@ import { getIncompleteTaskCount } from "./services/db/tasks";
 import { useTaskStore } from "./stores/taskStore";
 import { ContextMenuPortal } from "./components/ui/ContextMenuPortal";
 import { MoveToFolderDialog } from "./components/email/MoveToFolderDialog";
+import { SnoozeDialog } from "./components/email/SnoozeDialog";
 import { OfflineBanner } from "./components/ui/OfflineBanner";
 import { UpdateToast } from "./components/ui/UpdateToast";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
@@ -95,7 +97,7 @@ function useRouterSyncBridge() {
   }, []);
 }
 
-import { useThreadStore } from "./stores/threadStore";
+import { useThreadStore, accountIdForThread } from "./stores/threadStore";
 
 export default function App() {
   const theme = useUIStore((s) => s.theme);
@@ -109,6 +111,7 @@ export default function App() {
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [showAskInbox, setShowAskInbox] = useState(false);
   const [moveToFolderState, setMoveToFolderState] = useState<{ open: boolean; threadIds: string[] }>({ open: false, threadIds: [] });
+  const [snoozeState, setSnoozeState] = useState<{ open: boolean; threadIds: string[] }>({ open: false, threadIds: [] });
   const deepLinkCleanupRef = useRef<(() => void) | undefined>(undefined);
 
   // Sync bridge: router state → Zustand stores (temporary)
@@ -162,8 +165,14 @@ export default function App() {
     window.addEventListener("velo-toggle-command-palette", togglePalette);
     window.addEventListener("velo-toggle-shortcuts-help", toggleHelp);
     window.addEventListener("velo-toggle-ask-inbox", toggleAskInbox);
+    const handleSnooze = (e: Event) => {
+      const detail = (e as CustomEvent<{ threadIds: string[] }>).detail;
+      setSnoozeState({ open: true, threadIds: detail.threadIds });
+    };
     window.addEventListener("velo-move-to-folder", handleMoveToFolder);
+    window.addEventListener("velo-snooze", handleSnooze);
     return () => {
+      window.removeEventListener("velo-snooze", handleSnooze);
       window.removeEventListener("velo-toggle-command-palette", togglePalette);
       window.removeEventListener("velo-toggle-shortcuts-help", toggleHelp);
       window.removeEventListener("velo-toggle-ask-inbox", toggleAskInbox);
@@ -631,6 +640,28 @@ export default function App() {
         threadIds={moveToFolderState.threadIds}
         onClose={() => setMoveToFolderState({ open: false, threadIds: [] })}
       />
+      {/* Snooze had no keyboard route to it at all — only the toolbar button
+          and the context menu, each owning their own dialog. Hosting one here
+          lets the shortcut reach it from wherever the selection was made. */}
+      {snoozeState.open && (
+        <SnoozeDialog
+          onSnooze={async (until) => {
+            const activeAccountId = useAccountStore.getState().activeAccountId;
+            const ids = snoozeState.threadIds;
+            setSnoozeState({ open: false, threadIds: [] });
+            if (!activeAccountId) return;
+            for (const id of ids) {
+              try {
+                await snoozeThread(accountIdForThread(id, activeAccountId)!, id, until);
+                useThreadStore.getState().removeThread(id);
+              } catch (err) {
+                console.error("Snooze failed:", err);
+              }
+            }
+          }}
+          onClose={() => setSnoozeState({ open: false, threadIds: [] })}
+        />
+      )}
     </div>
   );
 }
