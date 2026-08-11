@@ -2,9 +2,9 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { CSSTransition } from "react-transition-group";
 import { useUIStore } from "@/stores/uiStore";
 import { useComposerStore } from "@/stores/composerStore";
-import { useThreadStore } from "@/stores/threadStore";
+import { accountIdForThread } from "@/stores/threadStore";
+import { spamThread } from "@/services/emailActions";
 import { useAccountStore } from "@/stores/accountStore";
-import { getGmailClient } from "@/services/gmail/tokenManager";
 import { getTemplatesForAccount, type DbTemplate } from "@/services/db/templates";
 import { useActiveLabel } from "@/hooks/useRouteNavigation";
 import { navigateToLabel, navigateBack, getSelectedThreadId } from "@/router/navigate";
@@ -58,13 +58,15 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
       const accountId = useAccountStore.getState().activeAccountId;
       if (!selectedId || !accountId) return;
       try {
-        const client = await getGmailClient(accountId);
-        if (activeLabel === "spam") {
-          await client.modifyThread(selectedId, ["INBOX"], ["SPAM"]);
-        } else {
-          await client.modifyThread(selectedId, ["SPAM"], ["INBOX"]);
-        }
-        useThreadStore.getState().removeThread(selectedId);
+        // Go through the action layer, which picks the right provider. Calling
+        // the Gmail client directly meant this did nothing on IMAP accounts,
+        // while the identical button in the toolbar worked.
+        await spamThread(
+          accountIdForThread(selectedId, accountId)!,
+          selectedId,
+          [],
+          activeLabel !== "spam",
+        );
       } catch (err) {
         console.error("Spam action failed:", err);
       }
