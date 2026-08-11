@@ -421,7 +421,10 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
         )}
 
         {!collapsed && unifiedInbox && accountCount > 1 && (
-          <div className="px-3 pt-3 pb-1 text-[0.625rem] font-medium text-sidebar-text/40 uppercase tracking-wider">
+          // Matches the Smart Folders and Labels headings below. This one came
+          // in with All Inboxes and did not, so it read as a lesser section
+          // rather than as the oversight it was.
+          <div className="px-3 pt-4 pb-1 text-xs font-medium text-sidebar-text/60 uppercase tracking-wider">
             Folders
           </div>
         )}
