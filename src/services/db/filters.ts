@@ -14,6 +14,15 @@ export interface FilterActions {
   star?: boolean;
   markRead?: boolean;
   trash?: boolean;
+  /**
+   * Category id to file matching mail under.
+   *
+   * Quick Steps could already set a category; filters could not, which left no
+   * way to say "mail from this sender is always Reads" without doing it by
+   * hand every time. A category is local state, not a server label, so this
+   * action never reaches the mail server.
+   */
+  setCategory?: string;
 }
 
 export interface DbFilterRule {

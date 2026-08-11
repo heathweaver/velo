@@ -2,6 +2,7 @@ import type { FilterCriteria, FilterActions } from "../db/filters";
 import { getEnabledFiltersForAccount } from "../db/filters";
 import type { ParsedMessage } from "../gmail/messageParser";
 import { addThreadLabel, removeThreadLabel, markThreadRead, starThread } from "../emailActions";
+import { setThreadCategory } from "../db/threadCategories";
 
 /**
  * Check if a parsed message matches the given filter criteria.
@@ -43,6 +44,8 @@ export interface FilterResult {
   removeLabelIds: string[];
   markRead: boolean;
   star: boolean;
+  /** Category id to file the thread under, or null to leave it alone. */
+  setCategory: string | null;
 }
 
 /**
@@ -74,6 +77,7 @@ export function computeFilterActions(actions: FilterActions): FilterResult {
     removeLabelIds,
     markRead: actions.markRead ?? false,
     star: actions.star ?? false,
+    setCategory: actions.setCategory ?? null,
   };
 }
 
@@ -115,6 +119,9 @@ export async function applyFiltersToMessages(
           existing.removeLabelIds.push(...result.removeLabelIds);
           existing.markRead = existing.markRead || result.markRead;
           existing.star = existing.star || result.star;
+          // First filter to name a category wins, matching the label merge
+          // above where later filters add to rather than replace the result.
+          existing.setCategory = existing.setCategory ?? result.setCategory;
         } else {
           threadActions.set(msg.threadId, result);
         }
@@ -129,6 +136,14 @@ export async function applyFiltersToMessages(
       const removeLabels = [...new Set(result.removeLabelIds)];
 
       try {
+        // Category first: it is local-only, so it still lands even if a
+        // server-side label change below fails.
+        if (result.setCategory) {
+          // Manual, so the classifier does not overwrite it on the next sweep —
+          // the user asked for this category by writing the rule.
+          await setThreadCategory(accountId, threadId, result.setCategory, true);
+        }
+
         // Apply label changes via provider
         for (const labelId of addLabels) {
           await addThreadLabel(accountId, threadId, labelId);

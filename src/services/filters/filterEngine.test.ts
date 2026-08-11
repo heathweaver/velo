@@ -150,4 +150,15 @@ describe("computeFilterActions", () => {
     expect(result.markRead).toBe(true);
     expect(result.star).toBe(true);
   });
+
+  it("carries a category through", () => {
+    // Filters could apply labels but not categories, so there was no way to
+    // say "mail from this sender is always Reads" without doing it by hand.
+    const result = computeFilterActions({ setCategory: "reads" });
+    expect(result.setCategory).toBe("reads");
+  });
+
+  it("leaves the category alone when the filter does not set one", () => {
+    expect(computeFilterActions({ archive: true }).setCategory).toBeNull();
+  });
 });

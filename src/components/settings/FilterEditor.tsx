@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Trash2, Pencil } from "lucide-react";
 import { TextField } from "@/components/ui/TextField";
 import { useAccountStore } from "@/stores/accountStore";
+import { useCategoryStore } from "@/stores/categoryStore";
 import { getLabelsForAccount, type DbLabel } from "@/services/db/labels";
 import {
   getFiltersForAccount,
@@ -15,6 +16,7 @@ import {
 
 export function FilterEditor() {
   const activeAccountId = useAccountStore((s) => s.activeAccountId);
+  const categories = useCategoryStore((s) => s.categories).filter((c) => c.isEnabled);
   const [filters, setFilters] = useState<DbFilterRule[]>([]);
   const [labels, setLabels] = useState<DbLabel[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -28,6 +30,7 @@ export function FilterEditor() {
   const [criteriaBody, setCriteriaBody] = useState("");
   const [criteriaHasAttachment, setCriteriaHasAttachment] = useState(false);
   const [actionLabel, setActionLabel] = useState("");
+  const [actionCategory, setActionCategory] = useState("");
   const [actionArchive, setActionArchive] = useState(false);
   const [actionStar, setActionStar] = useState(false);
   const [actionMarkRead, setActionMarkRead] = useState(false);
@@ -56,6 +59,7 @@ export function FilterEditor() {
     setCriteriaBody("");
     setCriteriaHasAttachment(false);
     setActionLabel("");
+    setActionCategory("");
     setActionArchive(false);
     setActionStar(false);
     setActionMarkRead(false);
@@ -77,6 +81,7 @@ export function FilterEditor() {
   const buildActions = (): FilterActions => {
     const a: FilterActions = {};
     if (actionLabel) a.applyLabel = actionLabel;
+    if (actionCategory) a.setCategory = actionCategory;
     if (actionArchive) a.archive = true;
     if (actionStar) a.star = true;
     if (actionMarkRead) a.markRead = true;
@@ -102,7 +107,7 @@ export function FilterEditor() {
 
     resetForm();
     await loadFilters();
-  }, [activeAccountId, name, editingId, resetForm, loadFilters, criteriaFrom, criteriaTo, criteriaSubject, criteriaBody, criteriaHasAttachment, actionLabel, actionArchive, actionStar, actionMarkRead, actionTrash]);
+  }, [activeAccountId, name, editingId, resetForm, loadFilters, criteriaFrom, criteriaTo, criteriaSubject, criteriaBody, criteriaHasAttachment, actionLabel, actionCategory, actionArchive, actionStar, actionMarkRead, actionTrash]);
 
   const handleEdit = useCallback((filter: DbFilterRule) => {
     setEditingId(filter.id);
@@ -119,6 +124,7 @@ export function FilterEditor() {
     setCriteriaBody(criteria.body ?? "");
     setCriteriaHasAttachment(criteria.hasAttachment ?? false);
     setActionLabel(actions.applyLabel ?? "");
+    setActionCategory(actions.setCategory ?? "");
     setActionArchive(actions.archive ?? false);
     setActionStar(actions.star ?? false);
     setActionMarkRead(actions.markRead ?? false);
@@ -268,6 +274,21 @@ export function FilterEditor() {
                     <option value="">None</option>
                     {labels.map((l) => (
                       <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {categories.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-text-secondary w-20">Category</span>
+                  <select
+                    value={actionCategory}
+                    onChange={(e) => setActionCategory(e.target.value)}
+                    className="flex-1 bg-bg-tertiary text-text-primary text-xs px-2 py-1 rounded border border-border-primary"
+                  >
+                    <option value="">None</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
                 </div>
