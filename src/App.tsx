@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Outlet } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
 import { Sidebar } from "./components/layout/Sidebar";
 import { AddAccount } from "./components/accounts/AddAccount";
 import { Composer } from "./components/composer/Composer";
@@ -106,7 +105,6 @@ export default function App() {
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [initialized, setInitialized] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [showAskInbox, setShowAskInbox] = useState(false);
@@ -427,24 +425,9 @@ export default function App() {
   // Listen for sync status updates
   const backfillDoneRef = useRef(false);
   useEffect(() => {
-    const unsub = onSyncStatus((accountId, status, progress, error) => {
+    const unsub = onSyncStatus((accountId, status, _progress, error) => {
       if (status === "syncing") {
-        if (progress) {
-          if (progress.phase === "messages") {
-            setSyncStatus(
-              `Syncing: ${progress.current}/${progress.total} messages`,
-            );
-          } else if (progress.phase === "labels") {
-            setSyncStatus("Syncing labels...");
-          } else if (progress.phase === "threads") {
-            setSyncStatus(`Building threads... (${progress.current}/${progress.total})`);
-          }
-        } else {
-          setSyncStatus("Syncing...");
-        }
       } else if (status === "done") {
-        setSyncStatus("Sync complete");
-        setTimeout(() => setSyncStatus(null), 2_000);
         window.dispatchEvent(new Event("velo-sync-done"));
         updateBadgeCount();
 
@@ -456,11 +439,12 @@ export default function App() {
             .catch((err) => console.error("Backfill error:", err));
         }
       } else if (status === "error") {
-        setSyncStatus(error ? `Sync failed: ${formatSyncError(error)}` : "Sync failed");
+        console.error(
+          `Sync failed for ${accountId}:`,
+          error ? formatSyncError(error) : "unknown error",
+        );
         // Still dispatch sync-done so the UI refreshes with any partially stored data
         window.dispatchEvent(new Event("velo-sync-done"));
-        // Auto-clear the error after 8 seconds
-        setTimeout(() => setSyncStatus(null), 8_000);
       }
     });
     return unsub;
@@ -607,28 +591,6 @@ export default function App() {
         </DndProvider>
       </div>
 
-      {/*
-        Sync indicator. This was a full-width bar pinned across the bottom of
-        the window for the duration of every sync — a lot of furniture for a
-        routine background task. Failures still warrant interrupting and keep a
-        visible treatment; ordinary progress is now a small spinner that is easy
-        to ignore.
-      */}
-      {syncStatus &&
-        (syncStatus.startsWith("Sync failed") ? (
-          <div className="fixed bottom-3 right-3 bg-danger text-white text-xs px-3 py-1.5 rounded-md shadow-lg z-40 animate-[fadeIn_200ms_ease-out]">
-            {syncStatus}
-          </div>
-        ) : (
-          <div
-            className="fixed bottom-3 right-3 flex items-center gap-1.5 text-text-tertiary text-xs z-40 animate-[fadeIn_200ms_ease-out]"
-            title={syncStatus}
-            aria-live="polite"
-          >
-            <RefreshCw size={12} className="animate-spin" />
-            <span className="sr-only">{syncStatus}</span>
-          </div>
-        ))}
 
       {showAddAccount && (
         <AddAccount

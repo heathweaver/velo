@@ -29,6 +29,14 @@ export function TitleBar() {
   // Browser provides its own window chrome — render nothing on the web.
   if (isWeb()) return null;
 
+  // macOS: the window is configured with an overlay title bar and hidden title,
+  // so the traffic lights already float over the content. Drawing a bar here
+  // just to repeat the app name costs a strip of vertical space across the top
+  // of the window. The sidebar reserves room for the lights and carries the
+  // drag region instead. Windows and Linux still need this bar for the
+  // minimise/maximise/close controls below.
+  if (isMac) return null;
+
   const handleMinimize = () => getCurrentWindow().minimize();
   const handleMaximize = () => getCurrentWindow().toggleMaximize();
   const handleClose = () => getCurrentWindow().close();

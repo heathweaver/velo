@@ -62,6 +62,9 @@ import {
 } from "lucide-react";
 import { useTaskStore } from "@/stores/taskStore";
 import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
+import { SyncButton } from "./SyncButton";
+
+const isMacOS = navigator.userAgent.includes("Macintosh");
 
 interface SidebarProps {
   collapsed: boolean;
@@ -368,6 +371,16 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
         collapsed ? "w-16" : "w-60"
       }`}
     >
+      {/* Room for the macOS traffic lights, which float over this corner now
+          that the title bar is gone. Doubles as the window's drag handle, with
+          the sync control sitting to their right as in other mail clients. */}
+      <div
+        data-tauri-drag-region
+        className={`flex items-center justify-end shrink-0 ${isMacOS ? "h-9 pr-2" : "h-8 pr-2"}`}
+      >
+        <SyncButton collapsed={collapsed} />
+      </div>
+
       <AccountSwitcher collapsed={collapsed} onAddAccount={onAddAccount} />
 
       {/* Compose lives beside the search field in the list header, so the
