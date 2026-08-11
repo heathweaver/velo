@@ -7,6 +7,7 @@ import { spamThread } from "@/services/emailActions";
 import { useAccountStore } from "@/stores/accountStore";
 import { getTemplatesForAccount, type DbTemplate } from "@/services/db/templates";
 import { useActiveLabel } from "@/hooks/useRouteNavigation";
+import { shortcutFor } from "@/utils/shortcutLabel";
 import { navigateToLabel, navigateBack, getSelectedThreadId } from "@/router/navigate";
 
 interface Command {
@@ -41,18 +42,18 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   const commands: Command[] = useMemo(() => [
     // Navigation
-    { id: "go-inbox", label: "Go to Inbox", shortcut: "g i", category: "Navigation", action: () => { navigateToLabel("inbox"); onClose(); } },
-    { id: "go-starred", label: "Go to Starred", shortcut: "g s", category: "Navigation", action: () => { navigateToLabel("starred"); onClose(); } },
-    { id: "go-sent", label: "Go to Sent", shortcut: "g t", category: "Navigation", action: () => { navigateToLabel("sent"); onClose(); } },
-    { id: "go-drafts", label: "Go to Drafts", shortcut: "g d", category: "Navigation", action: () => { navigateToLabel("drafts"); onClose(); } },
+    { id: "go-inbox", label: "Go to Inbox", shortcut: shortcutFor("nav.goInbox"), category: "Navigation", action: () => { navigateToLabel("inbox"); onClose(); } },
+    { id: "go-starred", label: "Go to Starred", shortcut: shortcutFor("nav.goStarred"), category: "Navigation", action: () => { navigateToLabel("starred"); onClose(); } },
+    { id: "go-sent", label: "Go to Sent", shortcut: shortcutFor("nav.goSent"), category: "Navigation", action: () => { navigateToLabel("sent"); onClose(); } },
+    { id: "go-drafts", label: "Go to Drafts", shortcut: shortcutFor("nav.goDrafts"), category: "Navigation", action: () => { navigateToLabel("drafts"); onClose(); } },
     { id: "go-snoozed", label: "Go to Snoozed", category: "Navigation", action: () => { navigateToLabel("snoozed"); onClose(); } },
     { id: "go-trash", label: "Go to Trash", category: "Navigation", action: () => { navigateToLabel("trash"); onClose(); } },
     { id: "go-all", label: "Go to All Mail", category: "Navigation", action: () => { navigateToLabel("all"); onClose(); } },
 
     // Actions
-    { id: "compose", label: "Compose New Email", shortcut: "c", category: "Actions", action: () => { openComposer(); onClose(); } },
-    { id: "deselect", label: "Close Thread", shortcut: "Esc", category: "Actions", action: () => { navigateBack(); onClose(); } },
-    { id: "spam", label: activeLabel === "spam" ? "Not Spam" : "Report Spam", shortcut: "!", category: "Actions", action: async () => {
+    { id: "compose", label: "Compose New Email", shortcut: shortcutFor("action.compose"), category: "Actions", action: () => { openComposer(); onClose(); } },
+    { id: "deselect", label: "Close Thread", shortcut: shortcutFor("nav.escape"), category: "Actions", action: () => { navigateBack(); onClose(); } },
+    { id: "spam", label: activeLabel === "spam" ? "Not Spam" : "Report Spam", shortcut: shortcutFor("action.spam"), category: "Actions", action: async () => {
       onClose();
       const selectedId = getSelectedThreadId();
       const accountId = useAccountStore.getState().activeAccountId;
@@ -77,21 +78,21 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
       onClose();
       useUIStore.getState().setTaskSidebarVisible(true);
     } },
-    { id: "task-extract", label: "Create Task from Email (AI)", shortcut: "t", category: "Tasks", action: () => {
+    { id: "task-extract", label: "Create Task from Email (AI)", shortcut: shortcutFor("action.createTaskFromEmail"), category: "Tasks", action: () => {
       onClose();
       const threadId = getSelectedThreadId();
       if (threadId) {
         window.dispatchEvent(new CustomEvent("velo-extract-task", { detail: { threadId } }));
       }
     } },
-    { id: "task-view", label: "View Tasks", shortcut: "g k", category: "Tasks", action: () => { navigateToLabel("tasks"); onClose(); } },
+    { id: "task-view", label: "View Tasks", shortcut: shortcutFor("nav.goTasks"), category: "Tasks", action: () => { navigateToLabel("tasks"); onClose(); } },
     { id: "task-toggle-panel", label: "Toggle Task Panel", category: "Tasks", action: () => { useUIStore.getState().toggleTaskSidebar(); onClose(); } },
 
     // AI
     { id: "ask-ai", label: "Ask AI about your inbox", category: "AI", action: () => { onClose(); window.dispatchEvent(new Event("velo-toggle-ask-inbox")); } },
 
     // Settings
-    { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: "Ctrl+Shift+E", category: "Settings", action: () => { toggleSidebar(); onClose(); } },
+    { id: "toggle-sidebar", label: "Toggle Sidebar", shortcut: shortcutFor("app.toggleSidebar"), category: "Settings", action: () => { toggleSidebar(); onClose(); } },
     { id: "theme-light", label: "Switch to Light Theme", category: "Settings", action: () => { setTheme("light"); onClose(); } },
     { id: "theme-dark", label: "Switch to Dark Theme", category: "Settings", action: () => { setTheme("dark"); onClose(); } },
     { id: "theme-system", label: "Use System Theme", category: "Settings", action: () => { setTheme("system"); onClose(); } },
