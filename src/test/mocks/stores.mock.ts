@@ -16,6 +16,10 @@ export function createMockThreadStoreState(
     updateThread: vi.fn(),
     removeThread: vi.fn(),
     removeThreads: vi.fn(),
+    // Removal actions bracket themselves with these so a sync-triggered reload
+    // cannot re-show a thread while its server call is still in flight.
+    beginRemoval: vi.fn(),
+    endRemoval: vi.fn(),
     ...overrides,
   };
 }

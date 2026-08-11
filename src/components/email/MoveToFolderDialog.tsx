@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { CSSTransition } from "react-transition-group";
 import { useLabelStore } from "@/stores/labelStore";
 import { useAccountStore } from "@/stores/accountStore";
-import { useThreadStore } from "@/stores/threadStore";
+import { useThreadStore, accountIdForThread } from "@/stores/threadStore";
 import {
   archiveThread,
   trashThread,
@@ -159,11 +159,11 @@ export function MoveToFolderDialog({
 
       for (const threadId of threadIds) {
         if (dest.id === "__archive__") {
-          await archiveThread(activeAccountId, threadId, []);
+          await archiveThread(accountIdForThread(threadId, activeAccountId)!, threadId, []);
         } else if (dest.id === "TRASH") {
-          await trashThread(activeAccountId, threadId, []);
+          await trashThread(accountIdForThread(threadId, activeAccountId)!, threadId, []);
         } else if (dest.id === "SPAM") {
-          await spamThread(activeAccountId, threadId, [], true);
+          await spamThread(accountIdForThread(threadId, activeAccountId)!, threadId, [], true);
         } else if (dest.id === "INBOX") {
           if (isImap) {
             await moveThread(activeAccountId, threadId, [], "INBOX");

@@ -43,6 +43,7 @@ describe("threadStore", () => {
       selectedThreadId: null,
       selectedThreadIds: new Set(),
       isLoading: false,
+      pendingRemovalIds: new Set(),
     });
   });
 
@@ -183,5 +184,39 @@ describe("threadStore", () => {
     // Other thread should be untouched
     const other = useThreadStore.getState().threads.find((t) => t.id === "thread-2");
     expect(other?.isRead).toBe(true); // was already true
+  });
+
+  describe("pending removals", () => {
+    it("keeps a thread out of the list while its removal is in flight", () => {
+      // Reproduces the flicker: the optimistic update hides the thread, then a
+      // sync completes and reloads the list from a database that still has it.
+      useThreadStore.getState().setThreads([mockThread, mockThread2]);
+      useThreadStore.getState().beginRemoval(["thread-1"]);
+      useThreadStore.getState().removeThread("thread-1");
+
+      // A sync-triggered reload hands back both threads again.
+      useThreadStore.getState().setThreads([mockThread, mockThread2]);
+
+      const ids = useThreadStore.getState().threads.map((t) => t.id);
+      expect(ids).toEqual(["thread-2"]);
+      expect(useThreadStore.getState().threadMap.has("thread-1")).toBe(false);
+    });
+
+    it("lets the thread back once the action settles", () => {
+      // If the server call fails the thread genuinely belongs in the list again,
+      // so the block must not outlive the action.
+      useThreadStore.getState().beginRemoval(["thread-1"]);
+      useThreadStore.getState().setThreads([mockThread, mockThread2]);
+      expect(useThreadStore.getState().threads).toHaveLength(1);
+
+      useThreadStore.getState().endRemoval(["thread-1"]);
+      useThreadStore.getState().setThreads([mockThread, mockThread2]);
+      expect(useThreadStore.getState().threads).toHaveLength(2);
+    });
+
+    it("does not filter anything when no removal is pending", () => {
+      useThreadStore.getState().setThreads([mockThread, mockThread2]);
+      expect(useThreadStore.getState().threads).toHaveLength(2);
+    });
   });
 });

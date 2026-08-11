@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
-import { useThreadStore } from "@/stores/threadStore";
+import { useThreadStore, accountIdForThread } from "@/stores/threadStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { getActiveLabel } from "@/router/navigate";
 import { useComposerStore } from "@/stores/composerStore";
@@ -243,7 +243,7 @@ function ThreadMenu({
   const isMuted = isMulti ? false : thread.isMuted;
 
   const handleReply = async () => {
-    const messages = await getMessagesForThread(activeAccountId, thread.id);
+    const messages = await getMessagesForThread(accountIdForThread(thread.id, activeAccountId)!, thread.id);
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage) return;
     const replyTo = lastMessage.reply_to ?? lastMessage.from_address;
@@ -258,7 +258,7 @@ function ThreadMenu({
   };
 
   const handleReplyAll = async () => {
-    const messages = await getMessagesForThread(activeAccountId, thread.id);
+    const messages = await getMessagesForThread(accountIdForThread(thread.id, activeAccountId)!, thread.id);
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage) return;
     const replyTo = lastMessage.reply_to ?? lastMessage.from_address;
@@ -283,7 +283,7 @@ function ThreadMenu({
   };
 
   const handleForward = async () => {
-    const messages = await getMessagesForThread(activeAccountId, thread.id);
+    const messages = await getMessagesForThread(accountIdForThread(thread.id, activeAccountId)!, thread.id);
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage) return;
     openComposer({
@@ -298,14 +298,14 @@ function ThreadMenu({
 
   const handleArchive = async () => {
     for (const id of targetIds) {
-      await archiveThread(activeAccountId, id, []);
+      await archiveThread(accountIdForThread(id, activeAccountId)!, id, []);
     }
   };
 
   const handleDelete = async () => {
     for (const id of targetIds) {
       if (isTrashView) {
-        await permanentDeleteThread(activeAccountId, id, []);
+        await permanentDeleteThread(accountIdForThread(id, activeAccountId)!, id, []);
         await deleteThreadFromDb(activeAccountId, id);
       } else if (isDraftsView) {
         useThreadStore.getState().removeThread(id);
@@ -316,7 +316,7 @@ function ThreadMenu({
           console.error("Failed to delete drafts:", err);
         }
       } else {
-        await trashThread(activeAccountId, id, []);
+        await trashThread(accountIdForThread(id, activeAccountId)!, id, []);
       }
     }
   };
@@ -325,7 +325,7 @@ function ThreadMenu({
     for (const id of targetIds) {
       const t = threads.find((th) => th.id === id);
       if (!t) continue;
-      await markThreadRead(activeAccountId, id, [], !t.isRead);
+      await markThreadRead(accountIdForThread(id, activeAccountId)!, id, [], !t.isRead);
     }
   };
 
@@ -333,7 +333,7 @@ function ThreadMenu({
     for (const id of targetIds) {
       const t = threads.find((th) => th.id === id);
       if (!t) continue;
-      await starThread(activeAccountId, id, [], !t.isStarred);
+      await starThread(accountIdForThread(id, activeAccountId)!, id, [], !t.isStarred);
     }
   };
 
@@ -353,7 +353,7 @@ function ThreadMenu({
 
   const handleSpam = async () => {
     for (const id of targetIds) {
-      await spamThread(activeAccountId, id, [], !isSpamView);
+      await spamThread(accountIdForThread(id, activeAccountId)!, id, [], !isSpamView);
     }
   };
 
@@ -368,7 +368,7 @@ function ThreadMenu({
       const newMuted = !t.isMuted;
       if (newMuted) {
         await muteThreadDb(activeAccountId, id);
-        await archiveThread(activeAccountId, id, []);
+        await archiveThread(accountIdForThread(id, activeAccountId)!, id, []);
       } else {
         await unmuteThreadDb(activeAccountId, id);
         useThreadStore.getState().updateThread(id, { isMuted: false });
@@ -412,12 +412,12 @@ function ThreadMenu({
       if (!t) continue;
       const hasLabel = t.labelIds.includes(labelId);
       if (hasLabel) {
-        await removeThreadLabel(activeAccountId, id, labelId);
+        await removeThreadLabel(accountIdForThread(id, activeAccountId)!, id, labelId);
         useThreadStore.getState().updateThread(id, {
           labelIds: t.labelIds.filter((l) => l !== labelId),
         });
       } else {
-        await addThreadLabel(activeAccountId, id, labelId);
+        await addThreadLabel(accountIdForThread(id, activeAccountId)!, id, labelId);
         useThreadStore.getState().updateThread(id, {
           labelIds: [...t.labelIds, labelId],
         });

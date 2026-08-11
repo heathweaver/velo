@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useUIStore } from "@/stores/uiStore";
-import { useThreadStore } from "@/stores/threadStore";
+import { useThreadStore, accountIdForThread } from "@/stores/threadStore";
 import { useComposerStore } from "@/stores/composerStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -303,10 +303,10 @@ async function executeAction(actionId: string): Promise<void> {
       if (multiIds.size > 0 && activeAccountId) {
         const ids = [...multiIds];
         for (const id of ids) {
-          await archiveThread(activeAccountId, id, []);
+          await archiveThread(accountIdForThread(id, activeAccountId)!, id, []);
         }
       } else if (selectedId && activeAccountId) {
-        await archiveThread(activeAccountId, selectedId, []);
+        await archiveThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, []);
       }
       break;
     }
@@ -319,7 +319,7 @@ async function executeAction(actionId: string): Promise<void> {
         const ids = [...multiDeleteIds];
         for (const id of ids) {
           if (isTrashView) {
-            await permanentDeleteThread(activeAccountId, id, []);
+            await permanentDeleteThread(accountIdForThread(id, activeAccountId)!, id, []);
             await deleteThreadFromDb(activeAccountId, id);
           } else if (isDraftsView) {
             try {
@@ -330,12 +330,12 @@ async function executeAction(actionId: string): Promise<void> {
               console.error("Draft delete failed:", err);
             }
           } else {
-            await trashThread(activeAccountId, id, []);
+            await trashThread(accountIdForThread(id, activeAccountId)!, id, []);
           }
         }
       } else if (selectedId && activeAccountId) {
         if (isTrashView) {
-          await permanentDeleteThread(activeAccountId, selectedId, []);
+          await permanentDeleteThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, []);
           await deleteThreadFromDb(activeAccountId, selectedId);
         } else if (isDraftsView) {
           try {
@@ -346,7 +346,7 @@ async function executeAction(actionId: string): Promise<void> {
             console.error("Draft delete failed:", err);
           }
         } else {
-          await trashThread(activeAccountId, selectedId, []);
+          await trashThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, []);
         }
       }
       break;
@@ -355,7 +355,7 @@ async function executeAction(actionId: string): Promise<void> {
       if (selectedId && activeAccountId) {
         const thread = threads.find((t) => t.id === selectedId);
         if (thread) {
-          await starThread(activeAccountId, selectedId, [], !thread.isStarred);
+          await starThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, [], !thread.isStarred);
         }
       }
       break;
@@ -366,10 +366,10 @@ async function executeAction(actionId: string): Promise<void> {
       if (multiSpamIds.size > 0 && activeAccountId) {
         const ids = [...multiSpamIds];
         for (const id of ids) {
-          await spamThread(activeAccountId, id, [], !isSpamView);
+          await spamThread(accountIdForThread(id, activeAccountId)!, id, [], !isSpamView);
         }
       } else if (selectedId && activeAccountId) {
-        await spamThread(activeAccountId, selectedId, [], !isSpamView);
+        await spamThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, [], !isSpamView);
       }
       break;
     }
@@ -410,7 +410,7 @@ async function executeAction(actionId: string): Promise<void> {
             const url = parseUnsubscribeUrl(unsubMsg.list_unsubscribe!);
             if (url) {
               await openUrl(url);
-              await archiveThread(activeAccountId, selectedId, []);
+              await archiveThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, []);
             }
           }
         } catch (err) {
@@ -430,7 +430,7 @@ async function executeAction(actionId: string): Promise<void> {
             useThreadStore.getState().updateThread(id, { isMuted: false });
           } else {
             await muteThreadDb(activeAccountId, id);
-            await archiveThread(activeAccountId, id, []);
+            await archiveThread(accountIdForThread(id, activeAccountId)!, id, []);
           }
         }
       } else if (selectedId && activeAccountId) {
@@ -441,7 +441,7 @@ async function executeAction(actionId: string): Promise<void> {
             useThreadStore.getState().updateThread(selectedId, { isMuted: false });
           } else {
             await muteThreadDb(activeAccountId, selectedId);
-            await archiveThread(activeAccountId, selectedId, []);
+            await archiveThread(accountIdForThread(selectedId, activeAccountId)!, selectedId, []);
           }
         }
       }

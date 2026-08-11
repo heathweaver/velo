@@ -7,6 +7,9 @@ vi.mock("@/stores/uiStore", () => ({
   useUIStore: { getState: () => ({ inboxViewMode: "unified", toggleSidebar: vi.fn() }) },
 }));
 vi.mock("@/stores/threadStore", () => ({
+  // Mirrors the real helper: without the thread in the map it returns the
+  // account passed in, which is what these single-account tests expect.
+  accountIdForThread: (_threadId: string, fallback: string | null) => fallback,
   useThreadStore: {
     getState: () => ({
       threads: [],

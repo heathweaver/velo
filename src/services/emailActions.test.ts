@@ -8,10 +8,17 @@ vi.mock("@/stores/uiStore", () => ({
 }));
 
 vi.mock("@/stores/threadStore", () => ({
+  // Mirrors the real helper: without the thread in the map it returns the
+  // account passed in, which is what these single-account tests expect.
+  accountIdForThread: (_threadId: string, fallback: string | null) => fallback,
   useThreadStore: {
     getState: vi.fn(() => ({
       updateThread: vi.fn(),
       removeThread: vi.fn(),
+      // Removal actions bracket themselves with these so a sync-triggered
+      // reload cannot re-show the thread while the server call is in flight.
+      beginRemoval: vi.fn(),
+      endRemoval: vi.fn(),
     })),
   },
 }));

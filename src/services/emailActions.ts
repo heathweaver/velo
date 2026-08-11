@@ -384,7 +384,39 @@ async function executeViaProvider(
   }
 }
 
+/** Actions that take a thread out of the current list. */
+const REMOVAL_ACTIONS = new Set([
+  "archive",
+  "trash",
+  "permanentDelete",
+  "spam",
+  "moveToFolder",
+]);
+
 export async function executeEmailAction(
+  accountId: string,
+  action: EmailAction,
+): Promise<ActionResult> {
+  // A removal stays "in flight" until the server call settles. Without this a
+  // sync completing mid-action reloads the list from a database that still has
+  // the thread — or has just had it re-inserted from a server that hasn't
+  // applied the move yet — so the row reappears and then vanishes again.
+  const removingThreadId =
+    REMOVAL_ACTIONS.has(action.type) && "threadId" in action ? action.threadId : null;
+  if (removingThreadId) {
+    useThreadStore.getState().beginRemoval([removingThreadId]);
+  }
+
+  try {
+    return await runEmailAction(accountId, action);
+  } finally {
+    if (removingThreadId) {
+      useThreadStore.getState().endRemoval([removingThreadId]);
+    }
+  }
+}
+
+async function runEmailAction(
   accountId: string,
   action: EmailAction,
 ): Promise<ActionResult> {

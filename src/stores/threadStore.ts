@@ -25,6 +25,19 @@ interface ThreadState {
   isLoading: boolean;
   searchQuery: string;
   searchThreadIds: Set<string> | null; // null = no active search
+  /**
+   * Threads whose removal (archive/trash/spam/move) is still in flight.
+   *
+   * The optimistic update hides the thread immediately, but the server call
+   * that follows takes time, and a sync completing in that window re-reads the
+   * database — where the row may still exist, or may have been re-inserted from
+   * a server that has not applied the move yet. The list then shows the thread
+   * again until cleanup removes it a second time, which reads as a flicker.
+   * Holding the ids here lets reloads skip them until the action settles.
+   */
+  pendingRemovalIds: Set<string>;
+  beginRemoval: (ids: string[]) => void;
+  endRemoval: (ids: string[]) => void;
   setThreads: (threads: Thread[]) => void;
   selectThread: (id: string | null) => void;
   toggleThreadSelection: (id: string) => void;
@@ -48,8 +61,31 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   isLoading: false,
   searchQuery: "",
   searchThreadIds: null,
+  pendingRemovalIds: new Set(),
 
-  setThreads: (threads) => set({ threads, threadMap: new Map(threads.map((t) => [t.id, t])) }),
+  beginRemoval: (ids) =>
+    set((state) => {
+      const next = new Set(state.pendingRemovalIds);
+      for (const id of ids) next.add(id);
+      return { pendingRemovalIds: next };
+    }),
+
+  endRemoval: (ids) =>
+    set((state) => {
+      const next = new Set(state.pendingRemovalIds);
+      for (const id of ids) next.delete(id);
+      return { pendingRemovalIds: next };
+    }),
+
+  setThreads: (threads) =>
+    set((state) => {
+      // Never re-introduce a thread the user has just acted on while the server
+      // call is still outstanding.
+      const visible = state.pendingRemovalIds.size
+        ? threads.filter((t) => !state.pendingRemovalIds.has(t.id))
+        : threads;
+      return { threads: visible, threadMap: new Map(visible.map((t) => [t.id, t])) };
+    }),
   selectThread: (selectedThreadId) => set({ selectedThreadId, selectedThreadIds: new Set() }),
   toggleThreadSelection: (id) =>
     set((state) => {
@@ -135,3 +171,22 @@ export const useThreadStore = create<ThreadState>((set, get) => ({
   setSearch: (query, threadIds) => set({ searchQuery: query, searchThreadIds: threadIds }),
   clearSearch: () => set({ searchQuery: "", searchThreadIds: null }),
 }));
+
+/**
+ * The account a thread belongs to, for actions that must reach the right server.
+ *
+ * Actions have historically used the globally active account, which holds only
+ * because every list is filtered to that one account. The moment a list can show
+ * threads from more than one mailbox, that assumption sends archives, trashes and
+ * label moves to the wrong server — silently, since the wrong server simply has
+ * no such message. Reading the account off the thread is identical in the
+ * single-account case and correct in both.
+ *
+ * Falls back to the supplied account when the thread is not in the current list.
+ */
+export function accountIdForThread(
+  threadId: string,
+  fallback: string | null,
+): string | null {
+  return useThreadStore.getState().threadMap.get(threadId)?.accountId ?? fallback;
+}
