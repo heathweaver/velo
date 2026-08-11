@@ -6,6 +6,10 @@ import ThreadWindow from "./ThreadWindow";
 import ComposerWindow from "./ComposerWindow";
 import { AuthGate } from "./components/auth/AuthGate";
 import "./styles/globals.css";
+import { installWebviewErrorLog } from "./utils/webviewErrorLog";
+
+// Install before anything else so startup failures are captured too.
+installWebviewErrorLog();
 
 const params = new URLSearchParams(window.location.search);
 const isThreadWindow = params.has("thread") && params.has("account");
