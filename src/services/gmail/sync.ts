@@ -75,15 +75,23 @@ async function processAndStoreThread(
     // Skip if manually categorized
     if (!existing || !existing.isManual) {
       const { categorizeByRules } = await import("@/services/categorization/ruleEngine");
-      const category = categorizeByRules({
-        labelIds: [...allLabelIds],
-        fromAddress: lastMessage.fromAddress,
-        listUnsubscribe: lastMessage.listUnsubscribe,
-      });
+      const { useCategoryStore, getDefaultCategoryId } = await import("@/stores/categoryStore");
+      const knownCategoryIds = new Set(
+        useCategoryStore.getState().categories.filter((c) => c.isEnabled).map((c) => c.id),
+      );
+      // A null answer means no rule applied to this user's categories. File it
+      // in the default for now; the AI pass reclassifies it on the next sweep.
+      const category =
+        categorizeByRules({
+          labelIds: [...allLabelIds],
+          fromAddress: lastMessage.fromAddress,
+          listUnsubscribe: lastMessage.listUnsubscribe,
+          knownCategoryIds,
+        }) ?? getDefaultCategoryId();
       await setThreadCategory(accountId, thread.id, category, false);
 
       // Auto-archive if category matches
-      if (client && autoArchiveCategories && autoArchiveCategories.has(category) && category !== "Primary") {
+      if (client && autoArchiveCategories && autoArchiveCategories.has(category) && category !== getDefaultCategoryId()) {
         try {
           await client.modifyThread(thread.id, undefined, ["INBOX"]);
           allLabelIds.delete("INBOX");

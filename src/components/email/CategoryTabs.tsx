@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useCallback, useRef, useState } from "react";
-import { Inbox, Bell, Tag, Users, Newspaper, type LucideIcon } from "lucide-react";
-import { ALL_CATEGORIES } from "@/services/db/threadCategories";
+import { useCategoryStore } from "@/stores/categoryStore";
+import { getCategoryIcon } from "@/constants/categoryIcons";
 
 export interface CategoryTabsProps {
   activeCategory: string;
@@ -8,15 +8,8 @@ export interface CategoryTabsProps {
   unreadCounts?: Record<string, number>;
 }
 
-const CATEGORY_ICONS: Record<string, LucideIcon> = {
-  Primary: Inbox,
-  Updates: Bell,
-  Promotions: Tag,
-  Social: Users,
-  Newsletters: Newspaper,
-};
-
 export function CategoryTabs({ activeCategory, onCategoryChange, unreadCounts }: CategoryTabsProps) {
+  const categories = useCategoryStore((s) => s.categories).filter((c) => c.isEnabled);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const [indicatorStyle, setIndicatorStyle] = useState<{ left: number; width: number } | null>(null);
@@ -65,8 +58,9 @@ export function CategoryTabs({ activeCategory, onCategoryChange, unreadCounts }:
         ref={scrollRef}
         className="flex px-2 overflow-x-auto hide-scrollbar relative"
       >
-        {ALL_CATEGORIES.map((cat) => {
-          const Icon = CATEGORY_ICONS[cat];
+        {categories.map((category) => {
+          const cat = category.id;
+          const Icon = getCategoryIcon(category.icon);
           const count = unreadCounts?.[cat] ?? 0;
           return (
             <button

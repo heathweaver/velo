@@ -1,4 +1,5 @@
 import { getActiveProvider } from "./providerManager";
+import { getEnabledCategories } from "@/stores/categoryStore";
 import { getAiCache, setAiCache } from "@/services/db/aiCache";
 import { AiError } from "./errors";
 import type { DbMessage } from "@/services/db/messages";
@@ -9,7 +10,7 @@ import {
   IMPROVE_PROMPT,
   SHORTEN_PROMPT,
   FORMALIZE_PROMPT,
-  CATEGORIZE_PROMPT,
+  buildCategorizePrompt,
   SMART_REPLY_PROMPT,
   ASK_INBOX_PROMPT,
   SMART_LABEL_PROMPT,
@@ -152,18 +153,24 @@ export async function askInbox(
   return callAi(ASK_INBOX_PROMPT, userContent);
 }
 
-const VALID_CATEGORIES = new Set(["Primary", "Updates", "Promotions", "Social", "Newsletters"]);
-
 export async function categorizeThreads(
   threads: { id: string; subject: string; snippet: string; fromAddress: string }[],
 ): Promise<Map<string, string>> {
+  // The categories the user actually has, with their descriptions, rather than
+  // a fixed list baked into the prompt. This is what lets the classifier file
+  // mail into a category the user invented instead of only reproducing the
+  // five Gmail tabs.
+  const userCategories = getEnabledCategories();
+  if (userCategories.length === 0) return new Map();
+
   const input = threads
     .map((t) => `<email_content>ID:${t.id} | From:${t.fromAddress} | Subject:${t.subject} | ${t.snippet}</email_content>`)
     .join("\n");
 
   const validThreadIds = new Set(threads.map((t) => t.id));
+  const VALID_CATEGORIES = new Set(userCategories.map((c) => c.id));
 
-  const result = await callAi(CATEGORIZE_PROMPT, input);
+  const result = await callAi(buildCategorizePrompt(userCategories), input);
   const categories = new Map<string, string>();
 
   for (const line of result.split("\n")) {

@@ -14,7 +14,7 @@ import {
   type QuickStepAction,
   type QuickStepActionType,
 } from "@/services/quickSteps/types";
-import { ALL_CATEGORIES } from "@/services/db/threadCategories";
+import { useCategoryStore } from "@/stores/categoryStore";
 import { seedDefaultQuickSteps } from "@/services/quickSteps/defaults";
 
 function describeActions(actionsJson: string): string {
@@ -36,6 +36,7 @@ function describeActions(actionsJson: string): string {
 
 export function QuickStepEditor() {
   const activeAccountId = useAccountStore((s) => s.activeAccountId);
+  const categories = useCategoryStore((s) => s.categories).filter((c) => c.isEnabled);
   const [quickSteps, setQuickSteps] = useState<DbQuickStep[]>([]);
   const [labels, setLabels] = useState<DbLabel[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -306,8 +307,8 @@ export function QuickStepEditor() {
                           className="w-full bg-bg-tertiary text-text-primary text-xs px-2 py-1 rounded border border-border-primary"
                         >
                           <option value="">Select category...</option>
-                          {ALL_CATEGORIES.map((cat) => (
-                            <option key={cat} value={cat}>{cat}</option>
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={cat.id}>{cat.name}</option>
                           ))}
                         </select>
                       )}

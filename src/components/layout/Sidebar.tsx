@@ -50,9 +50,7 @@ import {
   PanelLeftOpen,
   Pencil,
   Columns2,
-  Bell,
   Users,
-  Newspaper,
   Search,
   MailOpen,
   Paperclip,
@@ -63,6 +61,8 @@ import {
 import { useTaskStore } from "@/stores/taskStore";
 import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
 import { SyncButton } from "./SyncButton";
+import { useCategoryStore } from "@/stores/categoryStore";
+import { getCategoryIcon } from "@/constants/categoryIcons";
 
 const isMacOS = navigator.userAgent.includes("Macintosh");
 
@@ -87,13 +87,16 @@ export const ALL_NAV_ITEMS: { id: string; label: string; icon: LucideIcon }[] = 
   { id: "labels", label: "Labels", icon: Tag },
 ];
 
-const CATEGORY_ITEMS: { id: string; label: string; icon: LucideIcon }[] = [
-  { id: "Primary", label: "Primary", icon: Inbox },
-  { id: "Updates", label: "Updates", icon: Bell },
-  { id: "Promotions", label: "Promotions", icon: Tag },
-  { id: "Social", label: "Social", icon: Users },
-  { id: "Newsletters", label: "Newsletters", icon: Newspaper },
-];
+/**
+ * The inbox's category rows, built from the user's own categories rather than
+ * a fixed list, so one they add in settings appears here without a code change.
+ */
+function useCategoryItems(): { id: string; label: string; icon: LucideIcon }[] {
+  const categories = useCategoryStore((s) => s.categories);
+  return categories
+    .filter((c) => c.isEnabled)
+    .map((c) => ({ id: c.id, label: c.name, icon: getCategoryIcon(c.icon) }));
+}
 
 function DroppableNavItem({
   id,
@@ -228,6 +231,7 @@ function getSmartFolderIcon(iconName: string): LucideIcon {
 const LABELS_COLLAPSED_COUNT = 3;
 
 export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
+  const categoryItems = useCategoryItems();
   const activeLabel = useActiveLabel();
   const isAdmin = useAuthStore((s) => s.user?.role === "admin");
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
@@ -487,7 +491,7 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
               {/* Category sub-items when split mode is active */}
               {isInbox && inboxViewMode === "split" && !collapsed && (
                 <div>
-                  {CATEGORY_ITEMS.map((cat) => {
+                  {categoryItems.map((cat) => {
                     const CatIcon = cat.icon;
                     const isCatActive = activeLabel === "inbox" && activeCategory === cat.id;
                     return (

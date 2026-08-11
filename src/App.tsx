@@ -67,6 +67,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { DndProvider } from "./components/dnd/DndProvider";
 import { TitleBar } from "./components/layout/TitleBar";
 import { useShortcutStore } from "./stores/shortcutStore";
+import { useCategoryStore } from "./stores/categoryStore";
 import { getIncompleteTaskCount } from "./services/db/tasks";
 import { useTaskStore } from "./stores/taskStore";
 import { ContextMenuPortal } from "./components/ui/ContextMenuPortal";
@@ -311,6 +312,9 @@ export default function App() {
 
         // Load custom keyboard shortcuts
         await useShortcutStore.getState().loadKeyMap();
+        // Categories drive the sidebar rows, the split-inbox tabs, the filter
+        // actions and the classifier prompt, so they load before the first sync.
+        await useCategoryStore.getState().load();
 
         // Web: materialise the server-provisioned mailboxes as local accounts
         // before reading them, so sync/compose work through the mailbox_id.

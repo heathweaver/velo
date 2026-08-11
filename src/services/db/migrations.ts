@@ -792,6 +792,35 @@ const MIGRATIONS = [
       "Defaults to 0 so existing folders keep the scope they have today.",
     sql: `ALTER TABLE smart_folders ADD COLUMN search_all_accounts INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    version: 26,
+    description:
+      "Make categories editable. They were a hardcoded five-value union mirroring " +
+      "Gmail's own tabs, so the classifier could only ever reproduce Google's " +
+      "taxonomy. The description column is what the AI classifier is given, so a " +
+      "user-defined category is genuinely classifiable rather than a renamed tab. " +
+      "Ids match the old literals so existing thread_categories rows keep " +
+      "resolving. Categories are workspace-wide, not per-account: the same mail " +
+      "arriving at two addresses should land in the same category.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS categories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        icon TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT OR IGNORE INTO categories (id, name, description, icon, sort_order, is_enabled, is_default) VALUES
+        ('Primary', 'Primary', 'Personal correspondence, direct work email, and anything that needs a reply from me.', 'Inbox', 0, 1, 1),
+        ('Updates', 'Updates', 'Notifications, receipts, order confirmations, and other automated messages about something I already did.', 'Bell', 1, 1, 0),
+        ('Promotions', 'Promotions', 'Marketing email, deals, offers, and advertisements I did not ask for individually.', 'Tag', 2, 1, 0),
+        ('Social', 'Social', 'Notifications from social networks and community sites.', 'Users', 3, 1, 0),
+        ('Newsletters', 'Newsletters', 'Newsletters, digests, and blog updates I subscribed to and want to read.', 'Newspaper', 4, 1, 0);
+    `,
+  },
 ];
 
 /**

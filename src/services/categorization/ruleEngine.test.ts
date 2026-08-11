@@ -93,17 +93,56 @@ describe("categorizeByRules", () => {
     });
   });
 
-  describe("Layer 4: Default", () => {
-    it("returns Primary for regular person-to-person email", () => {
-      expect(categorizeByRules(input({ fromAddress: "alice@gmail.com" }))).toBe("Primary");
+  describe("Layer 4: no opinion", () => {
+    // Ordinary mail has no signal these Gmail-shaped rules can read, so they
+    // say nothing and the classifier — which knows the user's categories and
+    // their descriptions — decides. Answering "Primary" here would file real
+    // correspondence by default into a category the user may not even have.
+    it("returns null for regular person-to-person email", () => {
+      expect(categorizeByRules(input({ fromAddress: "alice@gmail.com" }))).toBeNull();
     });
 
-    it("returns Primary when no signals present", () => {
-      expect(categorizeByRules(input())).toBe("Primary");
+    it("returns null when no signals present", () => {
+      expect(categorizeByRules(input())).toBeNull();
     });
 
-    it("returns Primary for unknown domains with normal local part", () => {
-      expect(categorizeByRules(input({ fromAddress: "john.doe@company.com" }))).toBe("Primary");
+    it("returns null for unknown domains with normal local part", () => {
+      expect(categorizeByRules(input({ fromAddress: "john.doe@company.com" }))).toBeNull();
+    });
+  });
+
+  describe("Categories the user does not have", () => {
+    // The rules only know Gmail's taxonomy. Someone whose categories are Reads
+    // and Paper Trail should never be told a message is "Promotions" — that
+    // category does not exist for them, and filing mail under it would put the
+    // thread somewhere with no way to reach it.
+    const userCategories = new Set(["Reads", "Paper Trail"]);
+
+    it("declines a Gmail label whose category is not defined", () => {
+      expect(
+        categorizeByRules(input({
+          labelIds: ["CATEGORY_PROMOTIONS"],
+          knownCategoryIds: userCategories,
+        })),
+      ).toBeNull();
+    });
+
+    it("declines a domain heuristic whose category is not defined", () => {
+      expect(
+        categorizeByRules(input({
+          fromAddress: "hello@substack.com",
+          knownCategoryIds: userCategories,
+        })),
+      ).toBeNull();
+    });
+
+    it("still answers when the category does exist", () => {
+      expect(
+        categorizeByRules(input({
+          labelIds: ["CATEGORY_SOCIAL"],
+          knownCategoryIds: new Set(["Social", "Reads"]),
+        })),
+      ).toBe("Social");
     });
   });
 

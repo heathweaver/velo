@@ -6,6 +6,26 @@ vi.mock("@/services/db/threadCategories", () => ({
   setThreadCategory: vi.fn(() => Promise.resolve()),
 }));
 
+// The backfill only trusts a rule whose category the user actually has, so the
+// store has to answer with the shipped defaults for the Gmail-shaped rules to
+// fire at all.
+vi.mock("@/stores/categoryStore", () => ({
+  useCategoryStore: {
+    getState: () => ({
+      categories: ["Primary", "Updates", "Promotions", "Social", "Newsletters"].map((id) => ({
+        id,
+        name: id,
+        description: "",
+        icon: null,
+        sortOrder: 0,
+        isEnabled: true,
+        isDefault: id === "Primary",
+      })),
+    }),
+  },
+  getDefaultCategoryId: () => "Primary",
+}));
+
 vi.mock("@/services/db/threads", () => ({
   getThreadLabelIds: vi.fn(() => Promise.resolve(["INBOX"])),
 }));

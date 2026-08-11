@@ -2,8 +2,23 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { CategoryTabs } from "./CategoryTabs";
 
-vi.mock("@/services/db/threadCategories", () => ({
-  ALL_CATEGORIES: ["Primary", "Updates", "Promotions", "Social", "Newsletters"],
+// The tabs render the user's own categories now, so the store stands in for
+// what settings would have loaded.
+vi.mock("@/stores/categoryStore", () => ({
+  useCategoryStore: (
+    selector: (s: { categories: unknown[] }) => unknown,
+  ) =>
+    selector({
+      categories: ["Primary", "Updates", "Promotions", "Social", "Newsletters"].map((id) => ({
+        id,
+        name: id,
+        description: "",
+        icon: null,
+        sortOrder: 0,
+        isEnabled: true,
+        isDefault: id === "Primary",
+      })),
+    }),
 }));
 
 // jsdom does not provide ResizeObserver or scrollIntoView

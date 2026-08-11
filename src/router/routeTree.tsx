@@ -17,12 +17,16 @@ const AttachmentLibrary = lazy(() => import("@/components/attachments/Attachment
 const AdminPanel = lazy(() => import("@/components/admin/AdminPanel").then((m) => ({ default: m.AdminPanel })));
 
 // ---------- Search param validation ----------
-const VALID_CATEGORIES = ["Primary", "Updates", "Promotions", "Social", "Newsletters"] as const;
-
 type MailSearch = {
   q?: string;
-  category?: (typeof VALID_CATEGORIES)[number];
+  category?: string;
 };
+
+// Categories are user-defined, so the valid set is not known at build time.
+// Validation is structural — a non-empty string of sane length — and the views
+// resolve the id against the category store, showing nothing for one that no
+// longer exists rather than refusing to route.
+const MAX_CATEGORY_ID_LENGTH = 64;
 
 function validateMailSearch(search: Record<string, unknown>): MailSearch {
   const result: MailSearch = {};
@@ -30,8 +34,8 @@ function validateMailSearch(search: Record<string, unknown>): MailSearch {
     result.q = search["q"];
   }
   const cat = search["category"];
-  if (typeof cat === "string" && (VALID_CATEGORIES as readonly string[]).includes(cat)) {
-    result.category = cat as MailSearch["category"];
+  if (typeof cat === "string" && cat && cat.length <= MAX_CATEGORY_ID_LENGTH) {
+    result.category = cat;
   }
   return result;
 }

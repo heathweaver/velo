@@ -1,4 +1,5 @@
 import { getUncategorizedInboxThreadIds, setThreadCategory } from "@/services/db/threadCategories";
+import { useCategoryStore, getDefaultCategoryId } from "@/stores/categoryStore";
 import { getThreadLabelIds } from "@/services/db/threads";
 import { getMessagesForThread } from "@/services/db/messages";
 import { categorizeByRules } from "./ruleEngine";
@@ -18,6 +19,11 @@ export async function backfillUncategorizedThreads(
   let totalCategorized = 0;
   let batch: Awaited<ReturnType<typeof getUncategorizedInboxThreadIds>>;
 
+  const knownCategoryIds = new Set(
+    useCategoryStore.getState().categories.filter((c) => c.isEnabled).map((c) => c.id),
+  );
+  const defaultCategoryId = getDefaultCategoryId();
+
   do {
     batch = await getUncategorizedInboxThreadIds(accountId, batchSize);
 
@@ -28,11 +34,13 @@ export async function backfillUncategorizedThreads(
       ]);
       const lastMessage = messages[messages.length - 1];
 
-      const category = categorizeByRules({
-        labelIds,
-        fromAddress: lastMessage?.from_address ?? thread.fromAddress ?? null,
-        listUnsubscribe: lastMessage?.list_unsubscribe ?? null,
-      });
+      const category =
+        categorizeByRules({
+          labelIds,
+          fromAddress: lastMessage?.from_address ?? thread.fromAddress ?? null,
+          listUnsubscribe: lastMessage?.list_unsubscribe ?? null,
+          knownCategoryIds,
+        }) ?? defaultCategoryId;
 
       await setThreadCategory(accountId, thread.id, category, false);
       totalCategorized++;
