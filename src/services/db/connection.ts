@@ -48,10 +48,9 @@ export function buildDynamicUpdate(
 }
 
 /**
- * Simple async mutex to prevent concurrent SQLite transactions.
- * SQLite only supports one writer at a time; overlapping BEGIN/COMMIT/ROLLBACK
- * on the same connection causes "cannot start a transaction within a transaction"
- * or "database is locked" errors.
+ * Simple async mutex that serialises the blocks below. SQLite allows only one
+ * writer at a time, and overlapping write batches from sync, categorisation and
+ * attachment caching otherwise contend for the write lock.
  */
 let txQueue: Promise<void> = Promise.resolve();
 
@@ -72,20 +71,14 @@ export async function withTransaction(fn: (db: Db) => Promise<void>): Promise<vo
 
   const database = await getDb();
   try {
-    await database.execute("BEGIN TRANSACTION", []);
-    try {
-      await fn(database);
-      await database.execute("COMMIT", []);
-    } catch (err) {
-      // SQLite may auto-rollback on certain errors — guard against
-      // "cannot rollback - no transaction is active"
-      try {
-        await database.execute("ROLLBACK", []);
-      } catch {
-        // ROLLBACK failed (already rolled back) — safe to ignore
-      }
-      throw err;
-    }
+    // No explicit BEGIN/COMMIT here. Neither transport can guarantee that
+    // consecutive execute() calls reach the same SQLite connection: the Tauri
+    // plugin hands out connections from a sqlx pool, and the HTTP transport
+    // sends each statement as its own request. A BEGIN could take the write lock
+    // on one connection while its COMMIT ran on another, stranding an open write
+    // transaction so that every later write failed with SQLITE_BUSY ("database
+    // is locked"). The txQueue above already serialises these blocks.
+    await fn(database);
   } finally {
     resolve(); // always unblock the next queued transaction
   }
