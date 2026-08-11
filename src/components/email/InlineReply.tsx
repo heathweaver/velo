@@ -314,7 +314,7 @@ export function InlineReply({ thread, messages, accountId, noReply, onSent }: In
           onClick={() => activateMode("reply")}
           disabled={noReply}
           title={noReply ? "This sender does not accept replies" : undefined}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-lg hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
+          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-sm bg-bg-primary hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
         >
           <Reply size={14} />
           Reply
@@ -323,14 +323,14 @@ export function InlineReply({ thread, messages, accountId, noReply, onSent }: In
           onClick={() => activateMode("replyAll")}
           disabled={noReply}
           title={noReply ? "This sender does not accept replies" : undefined}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-lg hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
+          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-sm bg-bg-primary hover:bg-bg-hover hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
         >
           <ReplyAll size={14} />
           Reply All
         </button>
         <button
           onClick={() => activateMode("forward")}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-lg hover:bg-bg-hover hover:text-text-primary transition-colors"
+          className="flex items-center gap-1.5 px-4 py-2 text-xs text-text-secondary border border-border-primary rounded-sm bg-bg-primary hover:bg-bg-hover hover:text-text-primary transition-colors"
         >
           <Forward size={14} />
           Forward

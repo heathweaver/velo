@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { accountIdForThread } from "@/stores/threadStore";
 import { CSSTransition } from "react-transition-group";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -61,6 +62,7 @@ export function Composer() {
   const addAttachment = useComposerStore((s) => s.addAttachment);
 
   const activeAccountId = useAccountStore((s) => s.activeAccountId);
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
   const accounts = useAccountStore((s) => s.accounts);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const sendingRef = useRef(false);
@@ -290,7 +292,7 @@ export function Composer() {
 
         // Send & archive: remove from inbox if replying to a thread
         if (useUIStore.getState().sendAndArchive && state.threadId) {
-          try { await archiveThread(activeAccountId, state.threadId, []); } catch { /* ignore */ }
+          try { await archiveThread(accountIdForThread(state.threadId, activeAccountId)!, state.threadId, []); } catch { /* ignore */ }
         }
 
         // Update contacts frequency
@@ -450,17 +452,30 @@ export function Composer() {
 
   return (
     <CSSTransition nodeRef={overlayRef} in={isOpen} timeout={200} classNames="slide-up" unmountOnExit>
-    <div ref={overlayRef} className={`fixed inset-0 z-50 flex ${isFullpage ? "items-stretch justify-center p-4" : "items-end justify-center pb-4"} pointer-events-none`}>
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 pointer-events-auto backdrop-animate"
-        onClick={closeComposer}
-      />
+    <div
+      ref={overlayRef}
+      className={`fixed inset-0 z-50 flex ${isFullpage ? "items-stretch justify-center" : "items-end justify-center pb-4"} pointer-events-none`}
+      // Full page occupies the content area only: the sidebar stays visible and
+      // keeps carrying the window's traffic lights, which the composer would
+      // otherwise sit underneath.
+      style={isFullpage ? { left: sidebarCollapsed ? "4rem" : "15rem" } : undefined}
+    >
+      {/* Backdrop. Full page covers the window edge to edge, so a dimmed layer
+          behind it would never be visible — and clicking through to dismiss is
+          not wanted when the composer is the whole screen. */}
+      {!isFullpage && (
+        <div
+          className="absolute inset-0 pointer-events-auto backdrop-animate"
+          onClick={closeComposer}
+        />
+      )}
 
       {/* Composer window */}
       <div
-        className={`relative bg-bg-primary border rounded-lg glass-modal pointer-events-auto flex flex-col slide-up-panel ${
-          isFullpage ? "w-full h-full max-w-5xl" : "w-full max-w-2xl max-h-[80vh]"
+        className={`relative bg-bg-primary glass-modal pointer-events-auto flex flex-col ${
+          isFullpage
+            ? "w-full h-full border-0 rounded-none pt-6"
+            : "w-full max-w-2xl max-h-[80vh] border rounded-lg slide-up-panel"
         } ${isDragging ? "border-accent border-2" : "border-border-primary"}`}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
@@ -474,7 +489,7 @@ export function Composer() {
         )}
 
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-primary bg-bg-secondary rounded-t-lg">
+        <div className={`flex items-center justify-between px-4 py-2.5 border-b border-border-primary bg-bg-secondary ${isFullpage ? "" : "rounded-t-lg"}`}>
           <span className="text-sm font-medium text-text-primary">
             {modeLabel}
           </span>
@@ -573,7 +588,7 @@ export function Composer() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-t border-border-primary bg-bg-secondary rounded-b-lg">
+        <div className={`flex items-center justify-between px-4 py-2.5 border-t border-border-primary bg-bg-secondary ${isFullpage ? "" : "rounded-b-lg"}`}>
           <div className="flex items-center gap-3">
             <div className="text-xs text-text-tertiary">
               {fromEmail ?? activeAccount?.email ?? "No account"}

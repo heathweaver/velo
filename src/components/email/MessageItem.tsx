@@ -11,7 +11,7 @@ import { AuthWarningBanner } from "./AuthWarningBanner";
 
 interface MessageItemProps {
   message: DbMessage;
-  isLast: boolean;
+
   blockImages?: boolean | null;
   senderAllowlisted?: boolean;
   accountId?: string;
@@ -21,8 +21,10 @@ interface MessageItemProps {
   onContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, isLast, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu }, ref) {
-  const [expanded, setExpanded] = useState(isLast);
+export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu }, ref) {
+  // Threads read as a conversation, so every message starts open. Clicking a
+  // header still collapses it.
+  const [expanded, setExpanded] = useState(true);
   const [attachments, setAttachments] = useState<DbAttachment[]>([]);
   const [authBannerDismissed, setAuthBannerDismissed] = useState(false);
   const attachmentsLoadedRef = useRef(false);
@@ -38,12 +40,10 @@ export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(fun
     }
   };
 
-  // Load attachments for initially-expanded (last) message on mount
+  // Every message renders expanded, so each needs its attachments on mount.
   useEffect(() => {
-    if (isLast) {
-      loadAttachments();
-    }
-  }, [isLast]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadAttachments();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-expand when focused via keyboard navigation
   useEffect(() => {
@@ -76,19 +76,22 @@ export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(fun
   const fromDisplay = message.from_name ?? message.from_address ?? "Unknown";
 
   return (
-    <div ref={ref} className={`border-b border-border-secondary last:border-b-0 ${isSpam ? "bg-red-500/8 dark:bg-red-500/10" : ""} ${focused ? "ring-2 ring-inset ring-accent/50" : ""}`} onContextMenu={onContextMenu}>
-      {/* Header — always visible, click to expand/collapse */}
+    <div
+      ref={ref}
+      className={`bg-bg-primary border border-border-secondary rounded-sm overflow-hidden ${isSpam ? "bg-red-500/8 dark:bg-red-500/10" : ""} ${focused ? "ring-2 ring-inset ring-accent/50" : ""}`}
+      onContextMenu={onContextMenu}
+    >
+      {/* Header — always visible, click to expand/collapse. Hover uses the
+          accent tint rather than bg-hover, which is nearly invisible against
+          the card gutter behind it. */}
       <button
         onClick={handleToggle}
-        className="w-full text-left px-4 py-3 hover:bg-bg-hover transition-colors"
+        className="w-full text-left px-4 py-3 hover:bg-accent-light transition-colors"
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-full bg-accent/20 text-accent flex items-center justify-center shrink-0 text-xs font-medium">
-              {fromDisplay[0]?.toUpperCase()}
-            </div>
             <div className="min-w-0">
-              <span className="text-sm font-medium text-text-primary truncate flex items-center gap-1">
+              <span className="text-sm font-semibold text-text-primary truncate flex items-center gap-1">
                 {fromDisplay}
                 <AuthBadge authResults={message.auth_results} />
               </span>

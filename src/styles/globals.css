@@ -1,39 +1,53 @@
 @import "tailwindcss";
 
+/*
+ * Remote Executive palette (docs/brand, static/resources/styles.css):
+ *   navy #1a365d · slate #2d4a6f · amber #d97706
+ *   cream #f7f5f0 · warm grey #d4d0c8 · charcoal #2d3748
+ *
+ * Working surfaces (list, reading pane, composer) are plain white so message
+ * content renders on the background senders designed for. Navy carries the
+ * sidebar, amber marks the active row and unread state, and cream is reserved
+ * for accents rather than large areas.
+ */
 @theme {
-  --color-bg-primary: rgba(250, 250, 249, 0.92);
-  --color-bg-secondary: rgba(245, 245, 244, 0.88);
-  --color-bg-tertiary: rgba(231, 229, 228, 0.88);
-  --color-bg-hover: rgba(231, 229, 228, 0.65);
-  --color-bg-selected: rgba(224, 231, 255, 0.75);
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #fbfbfc;
+  --color-bg-tertiary: #f1f3f6;
+  --color-bg-hover: rgba(26, 54, 93, 0.05);
+  --color-bg-selected: rgba(26, 54, 93, 0.09);
 
-  --color-text-primary: #1c1917;
-  --color-text-secondary: #57534e;
-  --color-text-tertiary: #78716c;
+  --color-text-primary: #2d3748;
+  --color-text-secondary: #4a5568;
+  --color-text-tertiary: #718096;
 
-  --color-border-primary: rgba(0, 0, 0, 0.08);
-  --color-border-secondary: rgba(0, 0, 0, 0.04);
+  --color-border-primary: rgba(26, 54, 93, 0.12);
+  --color-border-secondary: rgba(26, 54, 93, 0.06);
 
-  --color-accent: #4f46e5;
-  --color-accent-hover: #4338ca;
-  --color-accent-light: #e0e7ff;
+  --color-accent: #1a365d;
+  --color-accent-hover: #2d4a6f;
+  --color-accent-light: #e4eaf3;
 
-  --color-danger: #dc2626;
+  --color-danger: #991b1b;
   --color-warning: #d97706;
-  --color-success: #059669;
+  --color-success: #166534;
 
-  --color-sidebar-bg: rgba(245, 245, 244, 0.95);
-  --color-sidebar-text: #1c1917;
-  --color-sidebar-hover: rgba(231, 229, 228, 0.8);
-  --color-sidebar-active: #4f46e5;
+  --color-cream: #f7f5f0;
+  --color-warm-grey: #d4d0c8;
 
-  --glass-blur: 20px;
-  --glass-blur-heavy: 24px;
-  --glass-border: rgba(255, 255, 255, 0.2);
-  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  --glass-shadow-elevated: 0 16px 48px rgba(0, 0, 0, 0.14);
-  --glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.4);
-  --backdrop-blur-overlay: 16px;
+  --color-sidebar-bg: #1a365d;
+  --color-sidebar-text: #e8edf5;
+  --color-sidebar-hover: rgba(255, 255, 255, 0.08);
+  --color-sidebar-active: #d97706;
+
+  /* Flat surfaces: no blur, since nothing translucent sits behind them now. */
+  --glass-blur: 0px;
+  --glass-blur-heavy: 0px;
+  --glass-border: rgba(26, 54, 93, 0.1);
+  --glass-shadow: none;
+  --glass-shadow-elevated: 0 8px 24px rgba(26, 54, 93, 0.12);
+  --glass-highlight: none;
+  --backdrop-blur-overlay: 8px;
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -88,8 +102,7 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
-  background: linear-gradient(135deg, #f5f0eb 0%, #ede4f5 30%, #fce7f3 60%, #fef3e2 80%, #e8eff8 100%);
-  background-attachment: fixed;
+  background: var(--color-bg-primary);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -97,7 +110,17 @@ body {
 }
 
 .dark body {
-  background-image: linear-gradient(135deg, #0c1222 0%, #151030 35%, #1a0a2e 65%, #0f172a 100%);
+  background: var(--color-bg-primary);
+}
+
+/*
+ * The animated gradient wash tinted every surface, because the panels above it
+ * are translucent. Message HTML is authored against a white page, so the tint
+ * changed how mail actually looked. Surfaces are opaque now; keep the element
+ * (App renders it) but stop it painting.
+ */
+.animated-bg {
+  display: none;
 }
 
 /* Animated gradient blobs behind content */

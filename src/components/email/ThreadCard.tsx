@@ -5,8 +5,16 @@ import { useThreadStore } from "@/stores/threadStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useActiveLabel } from "@/hooks/useRouteNavigation";
 import { formatRelativeDate } from "@/utils/date";
-import { Paperclip, Star, Check, Pin, BellRing, VolumeX } from "lucide-react";
+import { Paperclip, Star, Pin, BellRing, VolumeX, Rss, Bell, User, type LucideIcon } from "lucide-react";
 import type { DragData } from "@/components/dnd/DndProvider";
+import { senderKind, type SenderKind } from "@/utils/senderKind";
+
+/** Glyph shown beside the sender, standing in for the old avatar circle. */
+const SENDER_GLYPHS: Record<SenderKind, LucideIcon> = {
+  person: User,
+  notification: Bell,
+  feed: Rss,
+};
 
 const CATEGORY_COLORS: Record<string, string> = {
   Updates: "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400",
@@ -64,11 +72,7 @@ export const ThreadCard = memo(function ThreadCard({ thread, isSelected, onClick
   const handleContextMenu = onContextMenu
     ? (e: React.MouseEvent) => onContextMenu(e, thread.id)
     : undefined;
-  const initial = (
-    thread.fromName?.[0] ??
-    thread.fromAddress?.[0] ??
-    "?"
-  ).toUpperCase();
+  const SenderGlyph = SENDER_GLYPHS[senderKind(thread.fromAddress, category)];
 
   return (
     <button
@@ -85,36 +89,41 @@ export const ThreadCard = memo(function ThreadCard({ thread, isSelected, onClick
         isDragging
           ? "opacity-50"
           : isMultiSelected
-            ? "bg-accent/10"
+            ? "bg-accent/15 shadow-[inset_3px_0_0_0_var(--color-accent)]"
             : isSelected
               ? "bg-bg-selected"
               : "hover:bg-bg-hover"
       } ${isSpam ? "bg-red-500/8 dark:bg-red-500/10" : ""}`}
     >
-      <div className="flex items-start gap-3">
-        {/* Avatar */}
-        <div
-          className={`rounded-full flex items-center justify-center shrink-0 font-medium text-white ${
-            emailDensity === "compact" ? "w-7 h-7 text-xs" : emailDensity === "spacious" ? "w-10 h-10 text-sm" : "w-9 h-9 text-sm"
-          } ${
-            isMultiSelected ? "bg-accent" : thread.isRead ? "bg-text-tertiary" : "bg-accent"
-          }`}
-        >
-          {isMultiSelected ? <Check size={emailDensity === "compact" ? 14 : 16} /> : initial}
+      <div className="flex items-start gap-2">
+        {/*
+          Unread marker only. Avatars used to hold this column; a dot carries
+          the same "needs attention" signal in a fraction of the width, and
+          avoids inventing an identity circle for senders that are mailing lists
+          rather than people. Selection is shown by the row's background alone —
+          no checkbox.
+        */}
+        <div className="w-3 shrink-0 flex justify-center pt-1.5">
+          {!thread.isRead && (
+            <span className="w-2 h-2 rounded-full bg-accent" aria-hidden="true" />
+          )}
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">
           {/* First row: sender + date */}
           <div className="flex items-center justify-between gap-2">
-            <span
-              className={`text-sm truncate ${
-                thread.isRead
-                  ? "text-text-secondary"
-                  : "font-semibold text-text-primary"
-              }`}
-            >
-              {thread.fromName ?? thread.fromAddress ?? "Unknown"}
+            <span className="flex items-center gap-1.5 min-w-0">
+              <SenderGlyph size={14} className="shrink-0 text-text-tertiary" aria-hidden="true" />
+              <span
+                className={`text-sm truncate ${
+                  thread.isRead
+                    ? "text-text-secondary"
+                    : "font-semibold text-text-primary"
+                }`}
+              >
+                {thread.fromName ?? thread.fromAddress ?? "Unknown"}
+              </span>
             </span>
             <span className="text-xs text-text-tertiary whitespace-nowrap shrink-0">
               {formatRelativeDate(thread.lastMessageAt)}

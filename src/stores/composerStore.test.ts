@@ -20,7 +20,7 @@ describe("composerStore", () => {
       attachments: [],
       lastSavedAt: null,
       isSaving: false,
-      viewMode: "modal",
+      viewMode: "fullpage",
       signatureHtml: "",
       signatureId: null,
     });
@@ -215,8 +215,8 @@ describe("composerStore", () => {
     expect(useComposerStore.getState().signatureId).toBe("sig-1");
   });
 
-  it("viewMode defaults to modal", () => {
-    expect(useComposerStore.getState().viewMode).toBe("modal");
+  it("viewMode defaults to fullpage", () => {
+    expect(useComposerStore.getState().viewMode).toBe("fullpage");
   });
 
   it("setViewMode updates viewMode", () => {
@@ -227,15 +227,17 @@ describe("composerStore", () => {
     expect(useComposerStore.getState().viewMode).toBe("modal");
   });
 
-  it("closeComposer resets viewMode to modal", () => {
-    useComposerStore.getState().setViewMode("fullpage");
+  it("closeComposer resets viewMode to fullpage", () => {
+    useComposerStore.getState().setViewMode("modal");
     useComposerStore.getState().closeComposer();
-    expect(useComposerStore.getState().viewMode).toBe("modal");
+    expect(useComposerStore.getState().viewMode).toBe("fullpage");
   });
 
-  it("openComposer resets viewMode to modal", () => {
-    useComposerStore.getState().setViewMode("fullpage");
+  it("openComposer opens fullpage regardless of the previous mode", () => {
+    // Composing is treated as a full-window task, so every composer starts at
+    // full page; the header toggle still collapses it to the small modal.
+    useComposerStore.getState().setViewMode("modal");
     useComposerStore.getState().openComposer();
-    expect(useComposerStore.getState().viewMode).toBe("modal");
+    expect(useComposerStore.getState().viewMode).toBe("fullpage");
   });
 });
