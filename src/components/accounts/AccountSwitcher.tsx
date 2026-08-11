@@ -3,6 +3,7 @@ import { useAccountStore, type Account } from "@/stores/accountStore";
 import { ChevronDown, Check, Plus, UserPlus, Calendar } from "lucide-react";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import { syncAccountNow } from "@/services/gmail/syncManager";
+import { useComposerStore } from "@/stores/composerStore";
 
 interface AccountSwitcherProps {
   collapsed: boolean;
@@ -23,6 +24,11 @@ export function AccountSwitcher({
 
   const handleSwitch = useCallback(
     (id: string) => {
+      // Switching account is navigation too: leaving the composer open over the
+      // new account's mail is confusing, and the draft is already auto-saved.
+      const composer = useComposerStore.getState();
+      if (composer.isOpen) composer.closeComposer();
+
       setActiveAccount(id);
       setOpen(false);
       // Pull this mailbox's mail right away, bypassing the background-sync queue

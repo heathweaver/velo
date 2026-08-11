@@ -9,7 +9,25 @@ import { useLabelStore, type Label } from "@/stores/labelStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { useSmartFolderStore } from "@/stores/smartFolderStore";
 import { useActiveLabel, useActiveCategory } from "@/hooks/useRouteNavigation";
-import { navigateToLabel } from "@/router/navigate";
+import { navigateToLabel as routerNavigateToLabel } from "@/router/navigate";
+import { useComposerStore } from "@/stores/composerStore";
+
+/**
+ * Navigate from the sidebar, closing the composer first.
+ *
+ * The composer covers the whole content area, so navigating underneath it left
+ * the user looking at a compose window with no obvious way back to the folder
+ * they just clicked. Draft auto-save has already persisted the message, so
+ * closing here loses nothing — it is what the composer's own close button does.
+ */
+function navigateToLabel(
+  label: string,
+  opts?: { category?: string; threadId?: string },
+): void {
+  const composer = useComposerStore.getState();
+  if (composer.isOpen) composer.closeComposer();
+  routerNavigateToLabel(label, opts);
+}
 import { useAuthStore } from "@/stores/authStore";
 import {
   Inbox,
