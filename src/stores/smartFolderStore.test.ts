@@ -53,6 +53,7 @@ describe("smartFolderStore", () => {
           sort_order: 0,
           is_default: 1,
           created_at: 1000,
+          search_all_accounts: 0,
         },
         {
           id: "sf-2",
@@ -64,6 +65,7 @@ describe("smartFolderStore", () => {
           sort_order: 1,
           is_default: 0,
           created_at: 2000,
+          search_all_accounts: 1,
         },
       ]);
 
@@ -81,6 +83,7 @@ describe("smartFolderStore", () => {
         color: null,
         isDefault: true,
         sortOrder: 0,
+        searchAllAccounts: false,
       });
       expect(folders[1]).toEqual({
         id: "sf-2",
@@ -91,6 +94,7 @@ describe("smartFolderStore", () => {
         color: "#ff0000",
         isDefault: false,
         sortOrder: 1,
+        searchAllAccounts: true,
       });
     });
 

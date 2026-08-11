@@ -783,6 +783,15 @@ const MIGRATIONS = [
       "resolves and authorizes.",
     sql: `ALTER TABLE accounts ADD COLUMN mailbox_id TEXT;`,
   },
+  {
+    version: 25,
+    description:
+      "Let a smart folder search every account at once. Distinct from " +
+      "account_id IS NULL, which makes a folder's definition global — shown in " +
+      "every account's sidebar — while still searching only the active account. " +
+      "Defaults to 0 so existing folders keep the scope they have today.",
+    sql: `ALTER TABLE smart_folders ADD COLUMN search_all_accounts INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];
 
 /**

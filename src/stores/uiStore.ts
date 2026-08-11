@@ -9,7 +9,17 @@ export type EmailDensity = "compact" | "default" | "spacious";
 export type DefaultReplyMode = "reply" | "replyAll";
 export type MarkAsReadBehavior = "instant" | "2s" | "manual";
 export type FontScale = "small" | "default" | "large" | "xlarge";
-export type InboxViewMode = "unified" | "split";
+/**
+ * How the inbox is divided into Gmail-style category tabs. This is unrelated to
+ * accounts: "unified" here means one combined list rather than Primary/Updates/
+ * Promotions tabs. Cross-account viewing is the separate unifiedInbox setting.
+ *
+ * The stored values are left as-is so existing preferences keep working.
+ */
+export type InboxCategoryMode = "unified" | "split";
+
+/** @deprecated Use InboxCategoryMode — kept so existing imports keep compiling. */
+export type InboxViewMode = InboxCategoryMode;
 
 export interface SidebarNavItem {
   id: string;
@@ -33,6 +43,12 @@ interface UIState {
   taskSidebarVisible: boolean;
   sidebarNavConfig: SidebarNavItem[] | null;
   reduceMotion: boolean;
+  /**
+   * Show an "All Inboxes" entry that lists mail from every account in one list.
+   * Distinct from the inbox category mode above, which only splits a single
+   * account's inbox into tabs.
+   */
+  unifiedInbox: boolean;
   isOnline: boolean;
   pendingOpsCount: number;
   isSyncingFolder: string | null;
@@ -56,6 +72,7 @@ interface UIState {
   setSidebarNavConfig: (config: SidebarNavItem[]) => void;
   restoreSidebarNavConfig: (config: SidebarNavItem[]) => void;
   setReduceMotion: (reduce: boolean) => void;
+  setUnifiedInbox: (enabled: boolean) => void;
   setOnline: (online: boolean) => void;
   setPendingOpsCount: (count: number) => void;
   setSyncingFolder: (folder: string | null) => void;
@@ -78,6 +95,7 @@ export const useUIStore = create<UIState>((set) => ({
   taskSidebarVisible: false,
   sidebarNavConfig: null,
   reduceMotion: false,
+  unifiedInbox: false,
   isOnline: true,
   pendingOpsCount: 0,
   isSyncingFolder: null,
@@ -149,6 +167,10 @@ export const useUIStore = create<UIState>((set) => ({
     set({ sidebarNavConfig });
   },
   restoreSidebarNavConfig: (sidebarNavConfig) => set({ sidebarNavConfig }),
+  setUnifiedInbox: (unifiedInbox) => {
+    setSetting("unified_inbox", String(unifiedInbox)).catch(() => {});
+    set({ unifiedInbox });
+  },
   setReduceMotion: (reduceMotion) => {
     setSetting("reduce_motion", String(reduceMotion)).catch(() => {});
     set({ reduceMotion });

@@ -22,6 +22,7 @@ export function SmartFolderEditor() {
   const [query, setQuery] = useState("");
   const [icon, setIcon] = useState("Search");
   const [color, setColor] = useState("");
+  const [searchAllAccounts, setSearchAllAccounts] = useState(false);
 
   const loadFolders = useCallback(async () => {
     const f = await getSmartFolders(activeAccountId ?? undefined);
@@ -38,6 +39,7 @@ export function SmartFolderEditor() {
     setQuery("");
     setIcon("Search");
     setColor("");
+    setSearchAllAccounts(false);
     setEditingId(null);
     setShowForm(false);
   }, []);
@@ -51,6 +53,7 @@ export function SmartFolderEditor() {
         query: query.trim(),
         icon: icon.trim() || "Search",
         color: color.trim() || undefined,
+        searchAllAccounts,
       });
     } else {
       await insertSmartFolder({
@@ -59,13 +62,14 @@ export function SmartFolderEditor() {
         accountId: activeAccountId ?? undefined,
         icon: icon.trim() || "Search",
         color: color.trim() || undefined,
+        searchAllAccounts,
       });
     }
 
     resetForm();
     await loadFolders();
     await reloadStore(activeAccountId ?? undefined);
-  }, [activeAccountId, name, query, icon, color, editingId, resetForm, loadFolders, reloadStore]);
+  }, [activeAccountId, name, query, icon, color, searchAllAccounts, editingId, resetForm, loadFolders, reloadStore]);
 
   const handleEdit = useCallback((folder: DbSmartFolder) => {
     setEditingId(folder.id);
@@ -73,6 +77,7 @@ export function SmartFolderEditor() {
     setQuery(folder.query);
     setIcon(folder.icon);
     setColor(folder.color ?? "");
+    setSearchAllAccounts(folder.search_all_accounts === 1);
     setShowForm(true);
   }, []);
 
@@ -169,6 +174,22 @@ export function SmartFolderEditor() {
               />
             </div>
           </div>
+
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={searchAllAccounts}
+              onChange={(e) => setSearchAllAccounts(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <span className="text-xs text-text-secondary">
+              Search all accounts
+              <span className="block text-text-tertiary">
+                Combines every mailbox into one list — use this for a unified
+                inbox. Leave off to search only the account being viewed.
+              </span>
+            </span>
+          </label>
 
           <div className="flex items-center gap-2">
             <button

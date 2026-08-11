@@ -74,6 +74,23 @@ describe("getSmartFolderSearchQuery", () => {
     expect(params).toContain("acc-1");
   });
 
+  it("omits the account filter when no account is given, so the folder spans every mailbox", () => {
+    // This is what makes a unified inbox possible: one list drawn from all
+    // accounts at once. Actions on those rows resolve their account from the
+    // thread, since there is no single active account to rely on.
+    const { sql, params } = getSmartFolderSearchQuery("is:unread", undefined);
+    expect(sql).not.toContain("m.account_id =");
+    expect(params).not.toContain("acc-1");
+  });
+
+  it("still scopes to a single account when one is given", () => {
+    // Guards every existing smart folder: passing an account must behave
+    // exactly as before, so adding the all-accounts option cannot change them.
+    const { sql, params } = getSmartFolderSearchQuery("is:unread", "acc-2");
+    expect(sql).toContain("m.account_id =");
+    expect(params).toContain("acc-2");
+  });
+
   it("includes is:unread filter", () => {
     const { sql } = getSmartFolderSearchQuery("is:unread", "acc-1");
     expect(sql).toContain("m.is_read = 0");

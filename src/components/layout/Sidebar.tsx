@@ -4,7 +4,6 @@ import { AccountSwitcher } from "../accounts/AccountSwitcher";
 import { LabelForm } from "../labels/LabelForm";
 import { InputDialog } from "../ui/InputDialog";
 import { useUIStore } from "@/stores/uiStore";
-import { useComposerStore } from "@/stores/composerStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useLabelStore, type Label } from "@/stores/labelStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
@@ -44,6 +43,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "@/stores/taskStore";
+import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -215,8 +215,9 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
   const inboxViewMode = useUIStore((s) => s.inboxViewMode);
   const setInboxViewMode = useUIStore((s) => s.setInboxViewMode);
   const activeCategory = useActiveCategory();
-  const openComposer = useComposerStore((s) => s.openComposer);
   const activeAccountId = useAccountStore((s) => s.activeAccountId);
+  const accountCount = useAccountStore((s) => s.accounts.length);
+  const unifiedInbox = useUIStore((s) => s.unifiedInbox);
   const labels = useLabelStore((s) => s.labels);
   const loadLabels = useLabelStore((s) => s.loadLabels);
   const deleteLabel = useLabelStore((s) => s.deleteLabel);
@@ -351,17 +352,45 @@ export function Sidebar({ collapsed, onAddAccount }: SidebarProps) {
     >
       <AccountSwitcher collapsed={collapsed} onAddAccount={onAddAccount} />
 
-      {/* Compose button */}
-      <div className="px-3 py-2">
-        <button
-          onClick={() => openComposer()}
-          className="w-full flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover text-white rounded-lg py-2 text-sm font-medium interactive-btn"
-        >
-          {collapsed ? <Plus size={16} /> : "Compose"}
-        </button>
-      </div>
+      {/* Compose lives beside the search field in the list header, so the
+          sidebar stays a navigation surface. */}
 
       <nav className="flex-1 overflow-y-auto py-2">
+        {/*
+          All Inboxes sits above the per-account folders because it is not one
+          of them: it draws from every account at once. Everything below the
+          FOLDERS heading belongs to the account selected above.
+        */}
+        {unifiedInbox && accountCount > 1 && (
+          <button
+            onClick={() => navigateToLabel(ALL_INBOXES_LABEL)}
+            title={collapsed ? "All Inboxes" : undefined}
+            className={`flex items-center w-full py-3 mb-1 text-sm font-medium transition-colors press-scale border-l-2 ${
+              collapsed ? "justify-center px-0" : "gap-3 px-3 text-left"
+            } ${
+              activeLabel === ALL_INBOXES_LABEL
+                ? "bg-sidebar-hover text-sidebar-text border-sidebar-active"
+                : "hover:bg-sidebar-hover text-sidebar-text/90 border-transparent"
+            }`}
+          >
+            <Inbox size={18} className="shrink-0" />
+            {!collapsed && (
+              <span className="flex-1 truncate">
+                All Inboxes
+                <span className="block text-[0.625rem] font-normal opacity-50 leading-tight">
+                  {accountCount} accounts
+                </span>
+              </span>
+            )}
+          </button>
+        )}
+
+        {!collapsed && unifiedInbox && accountCount > 1 && (
+          <div className="px-3 pt-3 pb-1 text-[0.625rem] font-medium text-sidebar-text/40 uppercase tracking-wider">
+            Folders
+          </div>
+        )}
+
         {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isInbox = item.id === "inbox";

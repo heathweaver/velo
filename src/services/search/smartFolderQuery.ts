@@ -46,7 +46,8 @@ export function resolveQueryTokens(query: string): string {
  */
 export function getSmartFolderSearchQuery(
   rawQuery: string,
-  accountId: string,
+  /** Omit to search every account — used by all-accounts smart folders. */
+  accountId: string | undefined,
   limit?: number,
 ): { sql: string; params: unknown[] } {
   const resolved = resolveQueryTokens(rawQuery);
@@ -60,7 +61,8 @@ export function getSmartFolderSearchQuery(
  */
 export function getSmartFolderUnreadCount(
   rawQuery: string,
-  accountId: string,
+  /** Omit to count across every account. */
+  accountId: string | undefined,
 ): { sql: string; params: unknown[] } {
   const resolved = resolveQueryTokens(rawQuery);
   const parsed = parseSearchQuery(resolved);

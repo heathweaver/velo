@@ -93,6 +93,8 @@ export function SettingsPage() {
   const sendAndArchive = useUIStore((s) => s.sendAndArchive);
   const setSendAndArchive = useUIStore((s) => s.setSendAndArchive);
   const inboxViewMode = useUIStore((s) => s.inboxViewMode);
+  const unifiedInbox = useUIStore((s) => s.unifiedInbox);
+  const setUnifiedInbox = useUIStore((s) => s.setUnifiedInbox);
   const setInboxViewMode = useUIStore((s) => s.setInboxViewMode);
   const reduceMotion = useUIStore((s) => s.reduceMotion);
   const setReduceMotion = useUIStore((s) => s.setReduceMotion);
@@ -493,7 +495,13 @@ export function SettingsPage() {
                         })}
                       </div>
                     </SettingRow>
-                    <SettingRow label="Inbox view mode">
+                    <ToggleRow
+                      label="All Inboxes"
+                      description="Add a single list showing mail from every account. Folders below it still belong to the account you have selected."
+                      checked={unifiedInbox}
+                      onToggle={() => setUnifiedInbox(!unifiedInbox)}
+                    />
+                    <SettingRow label="Inbox categories">
                       <select
                         value={inboxViewMode}
                         onChange={(e) => {
@@ -501,8 +509,8 @@ export function SettingsPage() {
                         }}
                         className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
-                        <option value="unified">Unified</option>
-                        <option value="split">Split (Categories)</option>
+                        <option value="unified">One combined list</option>
+                        <option value="split">Split into category tabs</option>
                       </select>
                     </SettingRow>
                     <ToggleRow

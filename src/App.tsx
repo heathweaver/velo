@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Outlet } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { Sidebar } from "./components/layout/Sidebar";
 import { AddAccount } from "./components/accounts/AddAccount";
 import { Composer } from "./components/composer/Composer";
@@ -278,6 +279,12 @@ export default function App() {
         const savedReduceMotion = await getSetting("reduce_motion");
         if (savedReduceMotion === "true") {
           ui.setReduceMotion(true);
+        }
+
+        // Restore the cross-account "All Inboxes" entry
+        const savedUnifiedInbox = await getSetting("unified_inbox");
+        if (savedUnifiedInbox === "true") {
+          ui.setUnifiedInbox(true);
         }
 
         // Restore task sidebar visibility
@@ -600,16 +607,28 @@ export default function App() {
         </DndProvider>
       </div>
 
-      {/* Sync status bar */}
-      {syncStatus && (
-        <div
-          className={`fixed bottom-0 left-0 right-0 glass-panel text-white text-xs px-4 py-1.5 text-center z-40 animate-[slideUp_200ms_ease-out,fadeIn_200ms_ease-out] ${
-            syncStatus.startsWith("Sync failed") ? "bg-danger/90" : "bg-accent/90"
-          }`}
-        >
-          {syncStatus}
-        </div>
-      )}
+      {/*
+        Sync indicator. This was a full-width bar pinned across the bottom of
+        the window for the duration of every sync — a lot of furniture for a
+        routine background task. Failures still warrant interrupting and keep a
+        visible treatment; ordinary progress is now a small spinner that is easy
+        to ignore.
+      */}
+      {syncStatus &&
+        (syncStatus.startsWith("Sync failed") ? (
+          <div className="fixed bottom-3 right-3 bg-danger text-white text-xs px-3 py-1.5 rounded-md shadow-lg z-40 animate-[fadeIn_200ms_ease-out]">
+            {syncStatus}
+          </div>
+        ) : (
+          <div
+            className="fixed bottom-3 right-3 flex items-center gap-1.5 text-text-tertiary text-xs z-40 animate-[fadeIn_200ms_ease-out]"
+            title={syncStatus}
+            aria-live="polite"
+          >
+            <RefreshCw size={12} className="animate-spin" />
+            <span className="sr-only">{syncStatus}</span>
+          </div>
+        ))}
 
       {showAddAccount && (
         <AddAccount

@@ -18,6 +18,8 @@ export interface SmartFolder {
   color: string | null;
   isDefault: boolean;
   sortOrder: number;
+  /** Search every account rather than only the active one. */
+  searchAllAccounts: boolean;
 }
 
 function mapDbFolder(db: DbSmartFolder): SmartFolder {
@@ -30,6 +32,7 @@ function mapDbFolder(db: DbSmartFolder): SmartFolder {
     color: db.color,
     isDefault: db.is_default === 1,
     sortOrder: db.sort_order,
+    searchAllAccounts: db.search_all_accounts === 1,
   };
 }
 
@@ -44,10 +47,17 @@ interface SmartFolderState {
     accountId?: string,
     icon?: string,
     color?: string,
+    searchAllAccounts?: boolean,
   ) => Promise<string>;
   updateFolder: (
     id: string,
-    updates: { name?: string; query?: string; icon?: string; color?: string },
+    updates: {
+      name?: string;
+      query?: string;
+      icon?: string;
+      color?: string;
+      searchAllAccounts?: boolean;
+    },
   ) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
   refreshUnreadCounts: (accountId: string) => Promise<void>;
@@ -70,8 +80,8 @@ export const useSmartFolderStore = create<SmartFolderState>((set, get) => ({
     }
   },
 
-  createFolder: async (name, query, accountId?, icon?, color?) => {
-    const id = await insertSmartFolder({ name, query, accountId, icon, color });
+  createFolder: async (name, query, accountId?, icon?, color?, searchAllAccounts?) => {
+    const id = await insertSmartFolder({ name, query, accountId, icon, color, searchAllAccounts });
     const { folders } = get();
     set({
       folders: [
@@ -85,6 +95,7 @@ export const useSmartFolderStore = create<SmartFolderState>((set, get) => ({
           color: color ?? null,
           isDefault: false,
           sortOrder: folders.length,
+          searchAllAccounts: searchAllAccounts ?? false,
         },
       ],
     });
@@ -122,7 +133,9 @@ export const useSmartFolderStore = create<SmartFolderState>((set, get) => ({
         try {
           const { sql, params } = getSmartFolderUnreadCount(
             folder.query,
-            accountId,
+            // An all-accounts folder counts across every mailbox, so its badge
+            // matches the list it opens rather than the active account's share.
+            folder.searchAllAccounts ? undefined : accountId,
           );
           const rows = await db.select<{ count: number }[]>(sql, params);
           counts[folder.id] = rows[0]?.count ?? 0;

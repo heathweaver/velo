@@ -4,7 +4,7 @@ import { ThreadCard } from "../email/ThreadCard";
 import { CategoryTabs } from "../email/CategoryTabs";
 import { SearchBar } from "../search/SearchBar";
 import { EmailListSkeleton } from "../ui/Skeleton";
-import { useThreadStore, type Thread } from "@/stores/threadStore";
+import { useThreadStore, type Thread, accountIdForThread } from "@/stores/threadStore";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useActiveLabel, useSelectedThreadId, useActiveCategory } from "@/hooks/useRouteNavigation";
@@ -27,7 +27,8 @@ import { useComposerStore } from "@/stores/composerStore";
 import { getMessagesForThread } from "@/services/db/messages";
 import { getSmartFolderSearchQuery, mapSmartFolderRows, type SmartFolderRow } from "@/services/search/smartFolderQuery";
 import { getDb } from "@/services/db/connection";
-import { Archive, Trash2, X, Ban, Filter, ChevronRight, Package, FolderSearch } from "lucide-react";
+import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
+import { Archive, Trash2, X, Ban, Filter, ChevronRight, Package, FolderSearch, Pencil } from "lucide-react";
 import { EmptyState } from "../ui/EmptyState";
 import {
   InboxClearIllustration,
@@ -68,6 +69,10 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   const userLabels = useLabelStore((s) => s.labels);
   const smartFolders = useSmartFolderStore((s) => s.folders);
 
+  // The cross-account inbox is not one account's folder, so it reuses the
+  // smart-folder query path with the account filter omitted.
+  const isAllInboxes = activeLabel === ALL_INBOXES_LABEL;
+
   // Detect smart folder mode
   const isSmartFolder = activeLabel.startsWith("smart-folder:");
   const smartFolderId = isSmartFolder ? activeLabel.replace("smart-folder:", "") : null;
@@ -107,7 +112,7 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   const handleDraftClick = useCallback(async (thread: Thread) => {
     if (!activeAccountId) return;
     try {
-      const messages = await getMessagesForThread(activeAccountId, thread.id);
+      const messages = await getMessagesForThread(accountIdForThread(thread.id, activeAccountId)!, thread.id);
       // Get the last message (the draft)
       const draftMsg = messages[messages.length - 1];
       if (!draftMsg) return;
@@ -168,8 +173,8 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
       await Promise.all(
         ids.map((id) =>
           isTrashView
-            ? permanentDeleteThread(activeAccountId, id, [])
-            : trashThread(activeAccountId, id, []),
+            ? permanentDeleteThread(accountIdForThread(id, activeAccountId)!, id, [])
+            : trashThread(accountIdForThread(id, activeAccountId)!, id, []),
         ),
       );
     } catch (err) {
@@ -182,7 +187,7 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     const ids = [...selectedThreadIds];
     removeThreads(ids);
     try {
-      await Promise.all(ids.map((id) => archiveThread(activeAccountId, id, [])));
+      await Promise.all(ids.map((id) => archiveThread(accountIdForThread(id, activeAccountId)!, id, [])));
     } catch (err) {
       console.error("Bulk archive failed:", err);
     }
@@ -195,7 +200,7 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     removeThreads(ids);
     try {
       await Promise.all(
-        ids.map((id) => spamThread(activeAccountId, id, [], !isSpamView)),
+        ids.map((id) => spamThread(accountIdForThread(id, activeAccountId)!, id, [], !isSpamView)),
       );
     } catch (err) {
       console.error("Bulk spam failed:", err);
@@ -271,11 +276,19 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     setLoading(true);
     setHasMore(true);
     try {
-      // Smart folder query path
-      if (isSmartFolder && activeSmartFolder) {
+      // Smart folder query path. An all-accounts folder — and the All Inboxes
+      // entry — omit the account filter entirely so one list can span every
+      // mailbox; actions on those rows take their account from the thread
+      // rather than from activeAccountId.
+      if (isAllInboxes || (isSmartFolder && activeSmartFolder)) {
+        const query = isAllInboxes ? "label:inbox" : activeSmartFolder!.query;
+        const scopeToAccount =
+          isAllInboxes || activeSmartFolder?.searchAllAccounts
+            ? undefined
+            : activeAccountId;
         const { sql, params } = getSmartFolderSearchQuery(
-          activeSmartFolder.query,
-          activeAccountId,
+          query,
+          scopeToAccount,
           PAGE_SIZE,
         );
         const db = await getDb();
@@ -455,19 +468,32 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     }
   }, [selectedThreadId]);
 
+  // Always reload through the *current* loader.
+  //
+  // loadThreads is a useCallback that closes over activeLabel, so a debounced
+  // reload scheduled before a view change would re-run the previous view's
+  // query and overwrite the list that is now on screen — switching to All
+  // Inboxes loaded both accounts correctly, then a sync completing moments
+  // later replaced them with the old label's results. Holding the loader in a
+  // ref means a reload always queries the view the user is actually looking at.
+  const loadThreadsRef = useRef(loadThreads);
+  useEffect(() => {
+    loadThreadsRef.current = loadThreads;
+  }, [loadThreads]);
+
   // Listen for sync completion to reload (debounced to avoid waterfall from multiple emitters)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const handler = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => loadThreads(), 500);
+      timer = setTimeout(() => loadThreadsRef.current(), 500);
     };
     window.addEventListener("velo-sync-done", handler);
     return () => {
       window.removeEventListener("velo-sync-done", handler);
       if (timer) clearTimeout(timer);
     };
-  }, [loadThreads, activeAccountId, activeLabel]);
+  }, []);
 
   // Infinite scroll: load more when near bottom
   useEffect(() => {
@@ -497,9 +523,19 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
       }`}
       style={readingPanePosition === "right" && width ? { width } : undefined}
     >
-      {/* Search */}
-      <div className="px-3 py-2 border-b border-border-secondary">
-        <SearchBar />
+      {/* Search, with compose alongside it rather than filling the sidebar */}
+      <div className="px-3 py-2 border-b border-border-secondary flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <SearchBar />
+        </div>
+        <button
+          onClick={() => openComposer()}
+          title="Compose (c)"
+          aria-label="Compose"
+          className="shrink-0 w-9 h-9 flex items-center justify-center rounded-full border border-accent/40 text-accent hover:bg-accent hover:text-white hover:border-accent transition-colors interactive-btn"
+        >
+          <Pencil size={16} />
+        </button>
       </div>
 
       {/* Header */}

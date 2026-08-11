@@ -10,6 +10,8 @@ export interface DbSmartFolder {
   sort_order: number;
   is_default: number;
   created_at: number;
+  /** 1 = search every account, not just the active one. */
+  search_all_accounts: number;
 }
 
 /**
@@ -45,11 +47,12 @@ export async function insertSmartFolder(folder: {
   accountId?: string;
   icon?: string;
   color?: string;
+  searchAllAccounts?: boolean;
 }): Promise<string> {
   const db = await getDb();
   const id = crypto.randomUUID();
   await db.execute(
-    "INSERT INTO smart_folders (id, account_id, name, query, icon, color) VALUES ($1, $2, $3, $4, $5, $6)",
+    "INSERT INTO smart_folders (id, account_id, name, query, icon, color, search_all_accounts) VALUES ($1, $2, $3, $4, $5, $6, $7)",
     [
       id,
       folder.accountId ?? null,
@@ -57,6 +60,7 @@ export async function insertSmartFolder(folder: {
       folder.query,
       folder.icon ?? "Search",
       folder.color ?? null,
+      folder.searchAllAccounts ? 1 : 0,
     ],
   );
   return id;
@@ -64,13 +68,16 @@ export async function insertSmartFolder(folder: {
 
 export async function updateSmartFolder(
   id: string,
-  updates: { name?: string; query?: string; icon?: string; color?: string },
+  updates: { name?: string; query?: string; icon?: string; color?: string; searchAllAccounts?: boolean },
 ): Promise<void> {
   const fields: [string, unknown][] = [];
   if (updates.name !== undefined) fields.push(["name", updates.name]);
   if (updates.query !== undefined) fields.push(["query", updates.query]);
   if (updates.icon !== undefined) fields.push(["icon", updates.icon]);
   if (updates.color !== undefined) fields.push(["color", updates.color]);
+  if (updates.searchAllAccounts !== undefined) {
+    fields.push(["search_all_accounts", updates.searchAllAccounts ? 1 : 0]);
+  }
 
   const built = buildDynamicUpdate("smart_folders", "id", id, fields);
   if (!built) return;
