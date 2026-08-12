@@ -2,6 +2,7 @@ import { GmailClient } from "./client";
 import { parseGmailMessage, type ParsedMessage } from "./messageParser";
 import { upsertLabel } from "../db/labels";
 import { upsertThread, setThreadLabels } from "../db/threads";
+import { withTransaction } from "../db/connection";
 import { upsertMessage } from "../db/messages";
 import { upsertAttachment } from "../db/attachments";
 import { updateAccountSyncState } from "../db/accounts";
@@ -264,7 +265,16 @@ export async function initialSync(
         if (!thread.messages || thread.messages.length === 0) return;
 
         const parsedMessages = thread.messages.map(parseGmailMessage);
-        await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+        // Threads are fetched ten at a time, but SQLite takes one writer at a
+        // time. Storing them concurrently meant ten writers racing for the
+        // write lock, exhausting the busy timeout and failing outright with
+        // "database is locked" — during a full re-sync that discarded most of
+        // the mailbox, thread by thread, while reporting only console errors.
+        // Fetching stays concurrent; storing queues behind the same mutex the
+        // IMAP path uses, so all writers in the app take turns.
+        await withTransaction(async () => {
+          await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+        });
       } catch (err) {
         console.error(`Failed to sync thread ${stub.id}:`, err);
       }
