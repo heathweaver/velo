@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 use crate::imap::client as imap_client;
 use crate::imap::pool::SessionPool;
+use crate::imap::scheduler::{Priority, Scheduler, Turn};
 use crate::imap::types::{
     DeltaCheckRequest, DeltaCheckResult, ImapConfig, ImapFetchResult, ImapFolder,
     ImapFolderSearchResult, ImapFolderStatus, ImapFolderSyncResult, ImapMessage,
@@ -27,9 +28,29 @@ fn pool() -> &'static SessionPool {
     SESSION_POOL.get_or_init(SessionPool::new)
 }
 
-/// Take a session for this account — reused if one is idle and healthy.
-async fn checkout(config: &ImapConfig) -> Result<imap_client::ImapSession, String> {
-    pool().check_out(config).await
+static SCHEDULER: OnceLock<Scheduler> = OnceLock::new();
+
+fn scheduler() -> &'static Scheduler {
+    SCHEDULER.get_or_init(Scheduler::new)
+}
+
+/// Identifies the account for scheduling — the same identity the pool keys on.
+fn account_of(config: &ImapConfig) -> String {
+    format!("{}:{}/{}", config.host, config.port, config.username)
+}
+
+/// Wait for this account's turn, then take a session.
+///
+/// The returned Turn must stay alive for the whole operation: it is what stops
+/// two callers using one account's connection at once, and it is released when
+/// dropped, including on the `?` paths below.
+async fn checkout(
+    config: &ImapConfig,
+    priority: Priority,
+) -> Result<(imap_client::ImapSession, Turn), String> {
+    let turn = scheduler().acquire(&account_of(config), priority).await;
+    let session = pool().check_out(config).await?;
+    Ok((session, turn))
 }
 
 /// Give the session back after a successful operation.
@@ -37,8 +58,9 @@ async fn checkout(config: &ImapConfig) -> Result<imap_client::ImapSession, Strin
 /// Replaces the `session.logout()` these functions used to end with. On the
 /// error paths the session is simply dropped, which closes the socket — the
 /// same thing that happened before, since `?` skipped the logout too.
-async fn checkin(config: &ImapConfig, session: imap_client::ImapSession) {
+async fn checkin(config: &ImapConfig, session: imap_client::ImapSession, turn: Turn) {
     pool().check_in(config, session).await;
+    turn.release();
 }
 
 /// Drop every pooled session. Used when credentials change or an account is
@@ -53,10 +75,10 @@ pub async fn imap_test_connection(config: ImapConfig) -> Result<String, String> 
     imap_client::test_connection(&config).await
 }
 
-pub async fn imap_list_folders(config: ImapConfig) -> Result<Vec<ImapFolder>, String> {
-    let mut session = checkout(&config).await?;
+pub async fn imap_list_folders(config: ImapConfig, priority: Priority) -> Result<Vec<ImapFolder>, String> {
+    let (mut session, turn) = checkout(&config, priority).await?;
     let folders = imap_client::list_folders(&mut session).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(folders)
 }
 
@@ -64,6 +86,7 @@ pub async fn imap_fetch_messages(
     config: ImapConfig,
     folder: String,
     uids: Vec<u32>,
+    priority: Priority,
 ) -> Result<ImapFetchResult, String> {
     if uids.is_empty() {
         return Err("No UIDs provided".to_string());
@@ -75,9 +98,9 @@ pub async fn imap_fetch_messages(
         .collect::<Vec<_>>()
         .join(",");
 
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let result = imap_client::fetch_messages(&mut session, &folder, &uid_set).await;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
 
     match result {
         Ok(r) => Ok(r),
@@ -93,20 +116,22 @@ pub async fn imap_fetch_new_uids(
     config: ImapConfig,
     folder: String,
     since_uid: u32,
+    priority: Priority,
 ) -> Result<Vec<u32>, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let uids = imap_client::fetch_new_uids(&mut session, &folder, since_uid).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(uids)
 }
 
 pub async fn imap_search_all_uids(
     config: ImapConfig,
     folder: String,
+    priority: Priority,
 ) -> Result<Vec<u32>, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let uids = imap_client::search_all_uids(&mut session, &folder).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(uids)
 }
 
@@ -114,10 +139,11 @@ pub async fn imap_fetch_message_body(
     config: ImapConfig,
     folder: String,
     uid: u32,
+    priority: Priority,
 ) -> Result<ImapMessage, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let message = imap_client::fetch_message_body(&mut session, &folder, uid).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(message)
 }
 
@@ -125,10 +151,11 @@ pub async fn imap_fetch_raw_message(
     config: ImapConfig,
     folder: String,
     uid: u32,
+    priority: Priority,
 ) -> Result<String, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let raw = imap_client::fetch_raw_message(&mut session, &folder, uid).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(raw)
 }
 
@@ -138,12 +165,13 @@ pub async fn imap_set_flags(
     uids: Vec<u32>,
     flags: Vec<String>,
     add: bool,
+    priority: Priority,
 ) -> Result<(), String> {
     if uids.is_empty() {
         return Ok(());
     }
 
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
 
     let uid_set: String = uids
         .iter()
@@ -169,7 +197,7 @@ pub async fn imap_set_flags(
     );
 
     imap_client::set_flags(&mut session, &folder, &uid_set, flag_op, &flags_str).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(())
 }
 
@@ -178,12 +206,13 @@ pub async fn imap_move_messages(
     folder: String,
     uids: Vec<u32>,
     destination: String,
+    priority: Priority,
 ) -> Result<(), String> {
     if uids.is_empty() {
         return Ok(());
     }
 
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
 
     let uid_set: String = uids
         .iter()
@@ -192,7 +221,7 @@ pub async fn imap_move_messages(
         .join(",");
 
     imap_client::move_messages(&mut session, &folder, &uid_set, &destination).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(())
 }
 
@@ -200,12 +229,13 @@ pub async fn imap_delete_messages(
     config: ImapConfig,
     folder: String,
     uids: Vec<u32>,
+    priority: Priority,
 ) -> Result<(), String> {
     if uids.is_empty() {
         return Ok(());
     }
 
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
 
     let uid_set: String = uids
         .iter()
@@ -214,17 +244,18 @@ pub async fn imap_delete_messages(
         .join(",");
 
     imap_client::delete_messages(&mut session, &folder, &uid_set).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(())
 }
 
 pub async fn imap_get_folder_status(
     config: ImapConfig,
     folder: String,
+    priority: Priority,
 ) -> Result<ImapFolderStatus, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let status = imap_client::get_folder_status(&mut session, &folder).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(status)
 }
 
@@ -233,10 +264,11 @@ pub async fn imap_fetch_attachment(
     folder: String,
     uid: u32,
     part_id: String,
+    priority: Priority,
 ) -> Result<String, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let data = imap_client::fetch_attachment(&mut session, &folder, uid, &part_id).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(data)
 }
 
@@ -248,10 +280,11 @@ pub async fn imap_search_message_id(
     config: ImapConfig,
     folder: String,
     message_id: String,
+    priority: Priority,
 ) -> Result<Option<u32>, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let uid = imap_client::search_by_message_id(&mut session, &folder, &message_id).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(uid)
 }
 
@@ -260,15 +293,16 @@ pub async fn imap_append_message(
     folder: String,
     flags: Option<String>,
     raw_message: String,
+    priority: Priority,
 ) -> Result<(), String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
 
     // raw_message is base64url-encoded; decode it
     let raw_bytes = base64url_decode(&raw_message)?;
 
     let flags_ref = flags.as_deref();
     imap_client::append_message(&mut session, &folder, flags_ref, &raw_bytes).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(())
 }
 
@@ -284,10 +318,11 @@ pub async fn imap_search_folder(
     config: ImapConfig,
     folder: String,
     since_date: Option<String>,
+    priority: Priority,
 ) -> Result<ImapFolderSearchResult, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let result = imap_client::search_folder(&mut session, &folder, since_date).await;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     result
 }
 
@@ -296,10 +331,11 @@ pub async fn imap_sync_folder(
     folder: String,
     batch_size: u32,
     since_date: Option<String>,
+    priority: Priority,
 ) -> Result<ImapFolderSyncResult, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let result = imap_client::sync_folder(&mut session, &folder, batch_size, since_date).await;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     result
 }
 
@@ -314,10 +350,11 @@ pub async fn imap_raw_fetch_diagnostic(
 pub async fn imap_delta_check(
     config: ImapConfig,
     folders: Vec<DeltaCheckRequest>,
+    priority: Priority,
 ) -> Result<Vec<DeltaCheckResult>, String> {
-    let mut session = checkout(&config).await?;
+    let (mut session, turn) = checkout(&config, priority).await?;
     let results = imap_client::delta_check_folders(&mut session, &folders).await?;
-    checkin(&config, session).await;
+    checkin(&config, session, turn).await;
     Ok(results)
 }
 

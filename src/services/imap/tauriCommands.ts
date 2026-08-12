@@ -130,6 +130,16 @@ export interface SmtpSendResult {
  * Test IMAP connectivity: connect, authenticate, list folders, logout.
  * Returns a success message string.
  */
+/**
+ * How a call ranks against other work queued for the same account.
+ *
+ * Rust admits one operation per account at a time and lets interactive work
+ * jump ahead of background work, so a delete does not wait behind a mailbox
+ * sync. Omitting this means interactive: a user action mislabelled as
+ * background would wait behind exactly the work this is meant to escape.
+ */
+export type ImapPriority = "background";
+
 export async function imapTestConnection(config: ImapConfig): Promise<string> {
   return invoke<string>('imap_test_connection', { config });
 }
@@ -137,8 +147,11 @@ export async function imapTestConnection(config: ImapConfig): Promise<string> {
 /**
  * List all IMAP folders/mailboxes on the server.
  */
-export async function imapListFolders(config: ImapConfig): Promise<ImapFolder[]> {
-  return invoke<ImapFolder[]>('imap_list_folders', { config });
+export async function imapListFolders(
+  config: ImapConfig,
+  priority?: ImapPriority
+): Promise<ImapFolder[]> {
+  return invoke<ImapFolder[]>('imap_list_folders', { config, priority });
 }
 
 /**
@@ -148,9 +161,10 @@ export async function imapListFolders(config: ImapConfig): Promise<ImapFolder[]>
 export async function imapFetchMessages(
   config: ImapConfig,
   folder: string,
-  uids: number[]
+  uids: number[],
+  priority?: ImapPriority
 ): Promise<ImapFetchResult> {
-  return invoke<ImapFetchResult>('imap_fetch_messages', { config, folder, uids });
+  return invoke<ImapFetchResult>('imap_fetch_messages', { config, folder, uids, priority });
 }
 
 /**
@@ -159,9 +173,10 @@ export async function imapFetchMessages(
 export async function imapFetchNewUids(
   config: ImapConfig,
   folder: string,
-  sinceUid: number
+  sinceUid: number,
+  priority?: ImapPriority
 ): Promise<number[]> {
-  return invoke<number[]>('imap_fetch_new_uids', { config, folder, sinceUid });
+  return invoke<number[]>('imap_fetch_new_uids', { config, folder, sinceUid, priority });
 }
 
 /**
@@ -170,9 +185,10 @@ export async function imapFetchNewUids(
  */
 export async function imapSearchAllUids(
   config: ImapConfig,
-  folder: string
+  folder: string,
+  priority?: ImapPriority
 ): Promise<number[]> {
-  return invoke<number[]>('imap_search_all_uids', { config, folder });
+  return invoke<number[]>('imap_search_all_uids', { config, folder, priority });
 }
 
 /**
@@ -181,9 +197,10 @@ export async function imapSearchAllUids(
 export async function imapFetchMessageBody(
   config: ImapConfig,
   folder: string,
-  uid: number
+  uid: number,
+  priority?: ImapPriority
 ): Promise<ImapMessage> {
-  return invoke<ImapMessage>('imap_fetch_message_body', { config, folder, uid });
+  return invoke<ImapMessage>('imap_fetch_message_body', { config, folder, uid, priority });
 }
 
 /**
@@ -196,9 +213,10 @@ export async function imapSetFlags(
   folder: string,
   uids: number[],
   flags: string[],
-  add: boolean
+  add: boolean,
+  priority?: ImapPriority
 ): Promise<void> {
-  return invoke<void>('imap_set_flags', { config, folder, uids, flags, add });
+  return invoke<void>('imap_set_flags', { config, folder, uids, flags, add, priority });
 }
 
 /**
@@ -209,9 +227,10 @@ export async function imapMoveMessages(
   config: ImapConfig,
   folder: string,
   uids: number[],
-  destination: string
+  destination: string,
+  priority?: ImapPriority
 ): Promise<void> {
-  return invoke<void>('imap_move_messages', { config, folder, uids, destination });
+  return invoke<void>('imap_move_messages', { config, folder, uids, destination, priority });
 }
 
 /**
@@ -220,9 +239,10 @@ export async function imapMoveMessages(
 export async function imapDeleteMessages(
   config: ImapConfig,
   folder: string,
-  uids: number[]
+  uids: number[],
+  priority?: ImapPriority
 ): Promise<void> {
-  return invoke<void>('imap_delete_messages', { config, folder, uids });
+  return invoke<void>('imap_delete_messages', { config, folder, uids, priority });
 }
 
 /**
@@ -234,9 +254,10 @@ export async function imapAppendMessage(
   config: ImapConfig,
   folder: string,
   rawMessage: string,
-  flags?: string
+  flags?: string,
+  priority?: ImapPriority
 ): Promise<void> {
-  return invoke<void>('imap_append_message', { config, folder, flags: flags ?? null, rawMessage });
+  return invoke<void>('imap_append_message', { config, folder, flags: flags ?? null, rawMessage, priority });
 }
 
 /**
@@ -244,9 +265,10 @@ export async function imapAppendMessage(
  */
 export async function imapGetFolderStatus(
   config: ImapConfig,
-  folder: string
+  folder: string,
+  priority?: ImapPriority
 ): Promise<ImapFolderStatus> {
-  return invoke<ImapFolderStatus>('imap_get_folder_status', { config, folder });
+  return invoke<ImapFolderStatus>('imap_get_folder_status', { config, folder, priority });
 }
 
 /**
@@ -257,9 +279,10 @@ export async function imapFetchAttachment(
   config: ImapConfig,
   folder: string,
   uid: number,
-  partId: string
+  partId: string,
+  priority?: ImapPriority
 ): Promise<string> {
-  return invoke<string>('imap_fetch_attachment', { config, folder, uid, partId });
+  return invoke<string>('imap_fetch_attachment', { config, folder, uid, partId, priority });
 }
 
 /**
@@ -269,9 +292,10 @@ export async function imapFetchAttachment(
 export async function imapFetchRawMessage(
   config: ImapConfig,
   folder: string,
-  uid: number
+  uid: number,
+  priority?: ImapPriority
 ): Promise<string> {
-  return invoke<string>('imap_fetch_raw_message', { config, folder, uid });
+  return invoke<string>('imap_fetch_raw_message', { config, folder, uid, priority });
 }
 
 /**
@@ -280,9 +304,10 @@ export async function imapFetchRawMessage(
  */
 export async function imapDeltaCheck(
   config: ImapConfig,
-  folders: DeltaCheckRequest[]
+  folders: DeltaCheckRequest[],
+  priority?: ImapPriority
 ): Promise<DeltaCheckResult[]> {
-  return invoke<DeltaCheckResult[]>('imap_delta_check', { config, folders });
+  return invoke<DeltaCheckResult[]>('imap_delta_check', { config, folders, priority });
 }
 
 /**
@@ -295,8 +320,9 @@ export async function imapSearchMessageId(
   config: ImapConfig,
   folder: string,
   messageId: string,
+  priority?: ImapPriority
 ): Promise<number | null> {
-  return invoke<number | null>('imap_search_message_id', { config, folder, messageId });
+  return invoke<number | null>('imap_search_message_id', { config, folder, messageId, priority });
 }
 
 /**
@@ -309,8 +335,9 @@ export async function imapSyncFolder(
   folder: string,
   batchSize: number,
   sinceDate?: string | null,
+  priority?: ImapPriority
 ): Promise<ImapFolderSyncResult> {
-  return invoke<ImapFolderSyncResult>('imap_sync_folder', { config, folder, batchSize, sinceDate: sinceDate ?? null });
+  return invoke<ImapFolderSyncResult>('imap_sync_folder', { config, folder, batchSize, sinceDate: sinceDate ?? null, priority });
 }
 
 /**
@@ -322,8 +349,9 @@ export async function imapSearchFolder(
   config: ImapConfig,
   folder: string,
   sinceDate?: string | null,
+  priority?: ImapPriority
 ): Promise<ImapFolderSearchResult> {
-  return invoke<ImapFolderSearchResult>('imap_search_folder', { config, folder, sinceDate: sinceDate ?? null });
+  return invoke<ImapFolderSearchResult>('imap_search_folder', { config, folder, sinceDate: sinceDate ?? null, priority });
 }
 
 /**

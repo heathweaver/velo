@@ -449,6 +449,9 @@ describe("imapInitialSync", () => {
       expect.objectContaining({ host: "imap.example.com" }),
       "INBOX",
       expect.stringMatching(/^\d{1,2}-[A-Z][a-z]{2}-\d{4}$/), // sinceDate in DD-Mon-YYYY format
+      // Sync is background work so a user action can jump ahead of it. An
+      // unlabelled call would default to interactive and never yield.
+      "background",
     );
 
     // Then fetch the messages by UID
@@ -457,6 +460,7 @@ describe("imapInitialSync", () => {
       expect.objectContaining({ host: "imap.example.com" }),
       "INBOX",
       [1], // UIDs from search
+      "background",
     );
   });
 
