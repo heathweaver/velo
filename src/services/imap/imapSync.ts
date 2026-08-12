@@ -24,6 +24,7 @@ import type { SyncResult } from "../email/types";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, setThreadLabels, deleteThread } from "../db/threads";
 import { repairMissingThreadLabels } from "./labelRepair";
+import { needsFullRescan } from "@/services/sync/syncWindow";
 import { upsertAttachment } from "../db/attachments";
 import { getAccount, updateAccountSyncState } from "../db/accounts";
 import { withTransaction } from "../db/connection";
@@ -841,34 +842,6 @@ export async function imapInitialSync(
  * Perform delta sync for an IMAP account.
  * Fetches only new messages since the last sync using stored UID state.
  */
-/**
- * How far back a sync window reaches, for comparing two of them.
- *
- * 0 means "everything", so it sorts above every finite window.
- */
-function windowReach(days: number | null | undefined): number {
-  if (days === null || days === undefined) return 0;
-  return days <= 0 ? Number.POSITIVE_INFINITY : days;
-}
-
-/**
- * Whether a folder has to be walked from the beginning again.
- *
- * last_uid advances past every message fetched, including the ones the date
- * filter discarded, so a folder walked under a narrow window has everything
- * older sitting below the high-water mark where delta sync will never look.
- * Widening the window therefore cannot be honoured by asking for new UIDs — the
- * missing mail is *older*, not newer, and the folder needs a full pass.
- *
- * A folder with no recorded window predates this being tracked, so it is
- * treated as the narrowest possible and rescanned once.
- */
-export function needsFullRescan(
-  storedWindowDays: number | null | undefined,
-  currentWindowDays: number,
-): boolean {
-  return windowReach(currentWindowDays) > windowReach(storedWindowDays);
-}
 
 export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<SyncResult> {
   const account = await getAccount(accountId);

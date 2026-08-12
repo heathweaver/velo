@@ -1,6 +1,7 @@
 import { getGmailClient } from "./tokenManager";
 import { initialSync, deltaSync, type SyncProgress } from "./sync";
-import { getAccount, clearAccountHistoryId } from "../db/accounts";
+import { getAccount, clearAccountHistoryId, setAccountSyncWindow } from "../db/accounts";
+import { needsFullRescan } from "../sync/syncWindow";
 import { getSetting } from "../db/settings";
 import { getThreadCountForAccount, deleteAllThreadsForAccount } from "../db/threads";
 import { getMessageCountForAccount } from "../db/messages";
@@ -60,7 +61,23 @@ async function syncGmailAccount(accountId: string): Promise<void> {
   const parsedSyncDays = parseInt(syncPeriodStr ?? "30", 10);
   const syncDays = Number.isNaN(parsedSyncDays) ? 30 : parsedSyncDays;
 
-  if (account.history_id) {
+  // Gmail's history id only moves forward, so a widened window cannot be
+  // honoured by asking for what changed — the mail that is missing is older
+  // than the mark. Drop the history id and let the initial-sync path below run
+  // again. Without this, choosing "All emails" changed nothing at all.
+  const gmailWindowWidened =
+    account.provider === "gmail_api" &&
+    !!account.history_id &&
+    needsFullRescan(account.sync_window_days, syncDays);
+
+  if (gmailWindowWidened) {
+    console.warn(
+      `[syncManager] Sync window widened for ${accountId} — re-running the initial sync to fetch older mail`,
+    );
+    await clearAccountHistoryId(accountId);
+  }
+
+  if (account.history_id && !gmailWindowWidened) {
     // Delta sync
     try {
       await deltaSync(client, accountId, account.history_id);
@@ -81,6 +98,11 @@ async function syncGmailAccount(accountId: string): Promise<void> {
       statusCallback?.(accountId, "syncing", progress);
     });
   }
+
+  // Record what the mailbox has actually been walked under, so the next
+  // widening is detectable. Written after the sync rather than before, so a
+  // failed run does not claim coverage it never achieved.
+  await setAccountSyncWindow(accountId, syncDays);
 }
 
 /**

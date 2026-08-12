@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { deltaSync } from "./sync";
+import { deltaSync, buildDateQuery } from "./sync";
 import { GmailClient } from "./client";
 
 // Mock all DB modules
@@ -180,5 +180,31 @@ describe("deltaSync notifications", () => {
     await deltaSync(client, "account-1", "99");
 
     expect(mockNotify).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildDateQuery", () => {
+  // The bug this exists for: "All emails" is stored as 0, and subtracting 0
+  // days from today produced `after:<today>` — so the setting meant to fetch
+  // the entire mailbox fetched a single day of it, and was in fact the most
+  // restrictive option available.
+  it("returns no query at all for an unlimited window", () => {
+    expect(buildDateQuery(0)).toBeUndefined();
+  });
+
+  it("treats a negative window as unlimited rather than as a future date", () => {
+    expect(buildDateQuery(-1)).toBeUndefined();
+  });
+
+  it("restricts to the window when one is set", () => {
+    const query = buildDateQuery(30);
+    expect(query).toMatch(/^after:\d{4}\/\d{1,2}\/\d{1,2}$/);
+  });
+
+  it("reaches further back for a wider window", () => {
+    const parse = (q: string | undefined) =>
+      new Date(q!.replace("after:", "").replace(/\//g, "-")).getTime();
+
+    expect(parse(buildDateQuery(365))).toBeLessThan(parse(buildDateQuery(30)));
   });
 });

@@ -10,6 +10,12 @@ export interface DbAccount {
   refresh_token: string | null;
   token_expires_at: number | null;
   history_id: string | null;
+  /**
+   * The sync window this account was last fully synced under, in days
+   * (0 = everything). Null for accounts synced before this was tracked, which
+   * is treated as the narrowest possible so they re-sync once.
+   */
+  sync_window_days: number | null;
   last_sync_at: number | null;
   is_active: number;
   created_at: number;
@@ -330,4 +336,15 @@ export async function insertOAuthImapAccount(account: {
       account.acceptInvalidCerts ? 1 : 0,
     ],
   );
+}
+
+/**
+ * Record the window an account has been fully synced under.
+ *
+ * Written after a successful initial sync, so a later widening can be detected
+ * and acted on rather than silently ignored.
+ */
+export async function setAccountSyncWindow(id: string, windowDays: number): Promise<void> {
+  const db = await getDb();
+  await db.execute("UPDATE accounts SET sync_window_days = $1 WHERE id = $2", [windowDays, id]);
 }

@@ -834,6 +834,18 @@ const MIGRATIONS = [
       "rescan once.",
     sql: `ALTER TABLE folder_sync_state ADD COLUMN window_days INTEGER;`,
   },
+  {
+    version: 28,
+    description:
+      "Record the sync window an account was last fully synced under. Gmail " +
+      "tracks progress with a history id that only moves forward, so widening " +
+      "the window cannot be honoured by asking for what is new — the missing " +
+      "mail is older. Storing the window lets a widened setting trigger a fresh " +
+      "initial sync, the same way folder-level window tracking does for IMAP. " +
+      "NULL means unknown, treated as the narrowest possible so existing " +
+      "accounts re-sync once.",
+    sql: `ALTER TABLE accounts ADD COLUMN sync_window_days INTEGER;`,
+  },
 ];
 
 /**

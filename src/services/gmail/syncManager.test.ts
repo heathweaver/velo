@@ -11,6 +11,7 @@ vi.mock("./sync", () => ({
 vi.mock("../db/accounts", () => ({
   getAccount: vi.fn(),
   clearAccountHistoryId: vi.fn(),
+  setAccountSyncWindow: vi.fn(),
 }));
 vi.mock("../db/settings", () => ({
   getSetting: vi.fn().mockResolvedValue("365"),
@@ -74,6 +75,9 @@ function makeGmailAccount(id: string, historyId: string | null = null) {
     is_active: 1,
     provider: "gmail_api" as const,
     history_id: historyId,
+    // Matches the window the settings mock reports, so these tests exercise
+    // ordinary syncing rather than the widened-window rescan.
+    sync_window_days: 365,
     refresh_token: "tok",
     access_token: "tok",
     token_expiry: Date.now() + 60_000,

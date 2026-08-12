@@ -182,6 +182,20 @@ export async function syncLabels(
 /**
  * Perform an initial full sync: fetch all threads from the last N days.
  */
+/**
+ * The Gmail search query restricting a sync to its window, or undefined for no
+ * restriction.
+ *
+ * Exported for tests: the zero case is the one that mattered, and it is
+ * invisible from the outside once folded into a request.
+ */
+export function buildDateQuery(daysBack: number): string | undefined {
+  if (daysBack <= 0) return undefined;
+  const after = new Date();
+  after.setDate(after.getDate() - daysBack);
+  return `after:${after.getFullYear()}/${after.getMonth() + 1}/${after.getDate()}`;
+}
+
 export async function initialSync(
   client: GmailClient,
   accountId: string,
@@ -194,9 +208,12 @@ export async function initialSync(
   onProgress?.({ phase: "labels", current: 1, total: 1 });
 
   // Phase 2: Fetch thread list
-  const afterDate = new Date();
-  afterDate.setDate(afterDate.getDate() - daysBack);
-  const afterStr = `${afterDate.getFullYear()}/${afterDate.getMonth() + 1}/${afterDate.getDate()}`;
+  //
+  // A window of 0 means "everything", so it must produce no date restriction at
+  // all. Subtracting 0 days from today yields `after:<today>` — the narrowest
+  // query there is — so the setting meant to fetch the whole mailbox was
+  // fetching a single day of it.
+  const query = buildDateQuery(daysBack);
 
   const threadStubs: { id: string }[] = [];
   let pageToken: string | undefined;
@@ -207,7 +224,7 @@ export async function initialSync(
     const response = await client.listThreads({
       maxResults: 100,
       pageToken,
-      q: `after:${afterStr}`,
+      ...(query ? { q: query } : {}),
     });
 
     if (response.threads) {
