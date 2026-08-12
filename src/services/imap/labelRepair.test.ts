@@ -55,7 +55,10 @@ describe("repairMissingThreadLabels", () => {
     const repaired = await repairMissingThreadLabels("acc-1", FOLDERS);
 
     expect(repaired).toBe(1);
-    expect(mockExecute).toHaveBeenCalledTimes(2);
+    // Both labels go in one batched statement rather than a round trip each.
+    const [sql, params] = mockExecute.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("($1, $2, $3), ($4, $5, $6)");
+    expect(params).toEqual(["acc-1", "t1", "INBOX", "acc-1", "t1", "archive"]);
   });
 
   it("only asks about threads that have no labels at all", async () => {
