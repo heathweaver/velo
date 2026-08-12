@@ -469,9 +469,37 @@ pub async fn set_flags(
     .map_err(|_| format!("UID STORE timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
 }
 
+/// Which UIDs from `uid_set` are still present in the currently selected folder.
+///
+/// Used to confirm a move actually removed the source messages. A move that
+/// reports success while leaving them behind is worse than one that fails: the
+/// app deletes them locally, the next sync restores them from the server, and
+/// the mail appears to come back from the dead.
+async fn uids_still_present(
+    session: &mut ImapSession,
+    folder: &str,
+    uid_set: &str,
+) -> Result<Vec<u32>, String> {
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(folder))
+        .await
+        .map_err(|_| format!("SELECT {folder} timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("SELECT {folder} failed: {e}"))?;
+
+    let query = format!("UID {uid_set}");
+    let uids = tokio::time::timeout(IMAP_SEARCH_TIMEOUT, session.uid_search(&query))
+        .await
+        .map_err(|_| format!("UID SEARCH timed out after {}s — check your server settings or network connection", IMAP_SEARCH_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("UID SEARCH failed: {e}"))?;
+
+    let mut result: Vec<u32> = uids.into_iter().collect();
+    result.sort();
+    Ok(result)
+}
+
 /// Move messages between folders.
 ///
-/// Tries MOVE first; falls back to COPY + flag Deleted + EXPUNGE.
+/// Tries MOVE first; falls back to COPY + flag Deleted + EXPUNGE, and confirms
+/// the source is actually gone before reporting success.
 pub async fn move_messages(
     session: &mut ImapSession,
     source_folder: &str,
@@ -483,39 +511,100 @@ pub async fn move_messages(
         .map_err(|_| format!("SELECT {source_folder} timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
         .map_err(|e| format!("SELECT {source_folder} failed: {e}"))?;
 
-    // Try MOVE extension first
+    // Try MOVE extension first.
+    //
+    // A timeout is deliberately not treated as a failure. The command may well
+    // have been carried out — the server just did not answer in time — so
+    // falling straight through to COPY would file a second copy in the
+    // destination. Re-checking the source tells us which actually happened.
     match tokio::time::timeout(IMAP_CMD_TIMEOUT, session.uid_mv(uid_set, dest_folder)).await {
         Ok(Ok(())) => return Ok(()),
-        _ => {
-            // Fallback: COPY, then mark Deleted, then EXPUNGE
-            tokio::time::timeout(IMAP_CMD_TIMEOUT, session.uid_copy(uid_set, dest_folder))
-                .await
-                .map_err(|_| format!("UID COPY timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
-                .map_err(|e| format!("UID COPY failed: {e}"))?;
-
-            tokio::time::timeout(IMAP_CMD_TIMEOUT, async {
-                let store_stream = session
-                    .uid_store(uid_set, "+FLAGS (\\Deleted)")
-                    .await
-                    .map_err(|e| format!("UID STORE +Deleted failed: {e}"))?;
-                let _: Vec<_> = store_stream.collect().await;
-                Ok::<_, String>(())
-            })
-            .await
-            .map_err(|_| format!("UID STORE +Deleted timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))??;
-
-            tokio::time::timeout(IMAP_CMD_TIMEOUT, async {
-                let expunge_stream = session
-                    .expunge()
-                    .await
-                    .map_err(|e| format!("EXPUNGE failed: {e}"))?;
-                let _: Vec<_> = expunge_stream.collect().await;
-                Ok::<_, String>(())
-            })
-            .await
-            .map_err(|_| format!("EXPUNGE timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))??;
+        Err(_elapsed) => {
+            let remaining = uids_still_present(session, source_folder, uid_set).await?;
+            if remaining.is_empty() {
+                // The move landed after all.
+                return Ok(());
+            }
+            // Only the messages still in the source need retrying, so a partial
+            // move is not duplicated for the part that succeeded.
+            let retry_set = remaining
+                .iter()
+                .map(|u| u.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            copy_then_delete(session, source_folder, &retry_set, dest_folder).await?;
+        }
+        Ok(Err(_unsupported)) => {
+            // The server rejected MOVE outright — nothing has happened yet.
+            copy_then_delete(session, source_folder, uid_set, dest_folder).await?;
         }
     }
+
+    // Whatever route was taken, do not claim success while the messages are
+    // still sitting in the source folder.
+    let remaining = uids_still_present(session, source_folder, uid_set).await?;
+    if !remaining.is_empty() {
+        return Err(format!(
+            "Move to {dest_folder} did not remove {} message(s) from {source_folder}; the server kept them",
+            remaining.len()
+        ));
+    }
+
+    Ok(())
+}
+
+/// COPY to the destination, flag the originals deleted, then EXPUNGE.
+///
+/// Every step checks the server's per-message responses. They used to be
+/// collected and dropped, so a rejected STORE or an EXPUNGE that removed
+/// nothing still reported success — the delete was a lie the app had no way to
+/// notice, and nothing was ever queued for retry.
+async fn copy_then_delete(
+    session: &mut ImapSession,
+    source_folder: &str,
+    uid_set: &str,
+    dest_folder: &str,
+) -> Result<(), String> {
+    // Selected here rather than relying on the caller: every command below
+    // acts on the selected mailbox, and getting that wrong deletes from the
+    // wrong folder.
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(source_folder))
+        .await
+        .map_err(|_| format!("SELECT {source_folder} timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("SELECT {source_folder} failed: {e}"))?;
+
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, session.uid_copy(uid_set, dest_folder))
+        .await
+        .map_err(|_| format!("UID COPY timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("UID COPY failed: {e}"))?;
+
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, async {
+        let store_stream = session
+            .uid_store(uid_set, "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| format!("UID STORE +Deleted failed: {e}"))?;
+        let responses: Vec<_> = store_stream.collect().await;
+        for response in responses {
+            response.map_err(|e| format!("UID STORE +Deleted rejected by server: {e}"))?;
+        }
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|_| format!("UID STORE +Deleted timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))??;
+
+    tokio::time::timeout(IMAP_CMD_TIMEOUT, async {
+        let expunge_stream = session
+            .expunge()
+            .await
+            .map_err(|e| format!("EXPUNGE failed: {e}"))?;
+        let responses: Vec<_> = expunge_stream.collect().await;
+        for response in responses {
+            response.map_err(|e| format!("EXPUNGE rejected by server: {e}"))?;
+        }
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|_| format!("EXPUNGE timed out after {}s — check your server settings or network connection", IMAP_CMD_TIMEOUT.as_secs()))??;
 
     Ok(())
 }
