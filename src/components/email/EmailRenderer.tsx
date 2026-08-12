@@ -1,4 +1,4 @@
-import { useRef, useCallback, useMemo, useState, useEffect } from "react";
+import { useRef, useCallback, useLayoutEffect, useMemo, useState, useEffect } from "react";
 import { ImageOff } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { stripRemoteImages, hasBlockedImages } from "@/utils/imageBlocker";
@@ -29,6 +29,8 @@ export function EmailRenderer({
   inlineAttachments,
 }: EmailRendererProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const rafRef = useRef<number>(0);
   const [overrideShow, setOverrideShow] = useState(false);
   const [cidMap, setCidMap] = useState<Map<string, string>>(new Map());
 
@@ -113,32 +115,22 @@ export function EmailRenderer({
     return hasBlockedImages(stripRemoteImages(sanitizedBody));
   }, [shouldBlock, sanitizedBody]);
 
-  /**
-   * The document rendered inside the frame, including the small script that
-   * makes it usable.
-   *
-   * The frame used to be written through `contentDocument` under
-   * `sandbox="allow-same-origin"`, with the parent attaching a click listener to
-   * the frame's document. That listener was never invoked: a sandbox without
-   * `allow-scripts` disables scripting for that document, and WebKit skips
-   * listener invocation entirely — so link clicks did nothing, silently, in
-   * every configuration. Attaching succeeded, which is why it looked wired up.
-   *
-   * Now the frame runs its own script under `allow-scripts` *without*
-   * `allow-same-origin`, which puts it in an opaque origin: script inside
-   * cannot reach the parent document, cookies or storage, and cannot remove its
-   * own sandbox. It talks to the parent only through postMessage, reporting its
-   * height and any link the reader clicks. The body is DOMPurify output with
-   * script tags and event-handler attributes already stripped, so the only
-   * script that runs is this one.
-   */
-  const srcDoc = useMemo(() => {
+  // Write content directly into iframe document — synchronous, no srcDoc async parsing
+  useLayoutEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    observerRef.current?.disconnect();
+
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+
+    doc.open();
     // Plain text: blend with app theme (dark text on light bg, light text on dark bg)
     // HTML emails: always render on a light background since senders design for white/light
     const plainTextDark = isDark && isPlainText;
     const htmlDark = isDark && !isPlainText;
-
-    return `<!DOCTYPE html>
+    doc.write(`<!DOCTYPE html>
 <html>
 <head>
   <style>
@@ -166,80 +158,63 @@ export function EmailRenderer({
     table { max-width: 100%; }
   </style>
 </head>
-<body>${bodyHtml}<script>
-(function () {
-  var send = function (message) {
-    // The parent's origin is unknowable from an opaque origin, so the parent
-    // identifies this frame by its window rather than by an origin check.
-    parent.postMessage(Object.assign({ source: "velo-email" }, message), "*");
-  };
+<body>${bodyHtml}</body>
+</html>`);
+    doc.close();
 
-  var lastHeight = 0;
-  var report = function () {
-    var height = document.body.scrollHeight;
-    if (height > 0 && height !== lastHeight) {
-      lastHeight = height;
-      send({ type: "height", height: height });
-    }
-  };
+    // Calculate and set height synchronously before paint
+    const applyHeight = () => {
+      if (!doc.body) return;
+      const h = doc.body.scrollHeight;
+      if (h > 0) {
+        iframe.style.height = h + "px";
+      }
+    };
+    applyHeight();
 
-  document.addEventListener("click", function (e) {
-    var el = e.target;
-    while (el && el.tagName !== "A") el = el.parentElement;
-    if (!el || !el.href) return;
-    // Nothing in an email should navigate this frame; the parent decides what
-    // opening a link means.
-    e.preventDefault();
-    send({ type: "link", href: el.href });
-  });
+    // Watch for dynamic changes (images loading, etc.) — batched with rAF
+    const resizeObserver = new ResizeObserver(() => {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(applyHeight);
+    });
+    resizeObserver.observe(doc.body);
+    observerRef.current = resizeObserver;
 
-  report();
-  if (window.ResizeObserver) new ResizeObserver(report).observe(document.body);
-  window.addEventListener("load", report);
-})();
-<\/script></body>
-</html>`;
-  }, [bodyHtml, isDark, isPlainText]);
+    // Open links in external browser via Tauri opener
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const anchor = target.closest("a");
+      if (!anchor?.href) return;
 
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      // Identity, not origin: an opaque-origin frame reports "null" as its
-      // origin, so the only sound check is that the message came from this
-      // component's own frame.
-      const iframe = iframeRef.current;
-      if (!iframe || e.source !== iframe.contentWindow) return;
+      // Nothing in an email should navigate this frame.
+      e.preventDefault();
 
-      const data = e.data as { source?: string; type?: string; height?: number; href?: string };
-      if (data?.source !== "velo-email") return;
-
-      if (data.type === "height" && typeof data.height === "number") {
-        iframe.style.height = data.height + "px";
+      // The href is email content, so only schemes a mail client should open
+      // are honoured — not file:, and nothing the OS might route to another
+      // application.
+      let scheme: string;
+      try {
+        scheme = new URL(anchor.href).protocol;
+      } catch {
+        return;
+      }
+      if (scheme !== "http:" && scheme !== "https:" && scheme !== "mailto:") {
+        console.warn(`Refused to open link with unsupported scheme: ${scheme}`);
         return;
       }
 
-      if (data.type === "link" && typeof data.href === "string") {
-        // The href comes from email content, so only schemes a mail client
-        // should ever open are honoured — not file:, and not anything the
-        // system might hand to another application.
-        let scheme: string;
-        try {
-          scheme = new URL(data.href).protocol;
-        } catch {
-          return;
-        }
-        if (scheme !== "http:" && scheme !== "https:" && scheme !== "mailto:") {
-          console.warn(`Refused to open link with unsupported scheme: ${scheme}`);
-          return;
-        }
-        openUrl(data.href).catch((err) => {
-          console.error("Failed to open link:", err);
-        });
-      }
+      openUrl(anchor.href).catch((err) => {
+        console.error("Failed to open link:", err);
+      });
     };
+    doc.addEventListener("click", handleClick);
 
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
+    return () => {
+      doc.removeEventListener("click", handleClick);
+      observerRef.current?.disconnect();
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [bodyHtml, isDark, isPlainText]);
 
   const handleLoadImages = useCallback(() => {
     setOverrideShow(true);
@@ -278,10 +253,29 @@ export function EmailRenderer({
       )}
       <iframe
         ref={iframeRef}
-        // allow-scripts without allow-same-origin: the frame can run the script
-        // above but sits in an opaque origin, so it cannot touch the app.
-        sandbox="allow-scripts"
-        srcDoc={srcDoc}
+        /*
+          allow-scripts is what makes any of this work, and it is not about
+          running email script — it is about this frame having scripting
+          enabled at all. Without it the sandbox sets the "scripting disabled"
+          flag, and WebKit's JSEventListener::handleEvent returns early for
+          every listener on the frame's document, including the click handler
+          the parent attaches above. That is why links did nothing: the
+          listener was registered and never invoked.
+
+          Pairing it with allow-same-origin is normally the combination to
+          avoid, since a frame can then reach the parent and drop its own
+          sandbox. Two things make it safe here: the body is DOMPurify output
+          with script tags and event-handler attributes already stripped, and
+          the frame inherits the app's CSP (script-src 'self', no
+          unsafe-inline), so an inline script that somehow survived
+          sanitization still could not execute.
+
+          That same CSP inheritance is why the alternative — an opaque-origin
+          frame running its own injected script over postMessage — silently
+          did nothing: the injected script was inline, and inline script is
+          exactly what the policy forbids.
+        */
+        sandbox="allow-same-origin allow-scripts"
         className={`w-full border-0 ${isDark && !isPlainText ? "rounded-md" : ""}`}
         style={{ overflow: "hidden" }}
         title="Email content"
