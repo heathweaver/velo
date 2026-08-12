@@ -3,6 +3,7 @@ import { initialSync, deltaSync, type SyncProgress } from "./sync";
 import { getAccount, clearAccountHistoryId } from "../db/accounts";
 import { getSetting } from "../db/settings";
 import { getThreadCountForAccount, deleteAllThreadsForAccount } from "../db/threads";
+import { getMessageCountForAccount } from "../db/messages";
 import { deleteAllMessagesForAccount } from "../db/messages";
 import { imapInitialSync, imapDeltaSync } from "../imap/imapSync";
 import { clearAllFolderSyncStates } from "../db/folderSyncState";
@@ -107,13 +108,37 @@ async function syncImapAccount(accountId: string): Promise<void> {
     // Delta sync — IMAP uses folder-level UID tracking
     const result = await imapDeltaSync(accountId, syncDays);
 
-    // Recovery: if delta sync found nothing new but the DB has no threads,
-    // the previous initial sync likely failed or stored data incorrectly.
-    // Force a full re-sync to recover.
+    // Recovery: an account that has genuinely stored nothing gets a full
+    // re-sync, because its first one must have failed.
+    //
+    // This is destructive — it throws away every folder's UID state and
+    // re-downloads the mailbox — so it demands more proof than it used to. It
+    // fired once on an account holding 300+ threads, wiping its sync state,
+    // because a count taken during heavy write load came back 0 and "the query
+    // told me nothing" was indistinguishable from "there is nothing". Now both
+    // threads *and* messages must be absent, and a count that throws aborts
+    // the recovery rather than triggering it.
+    //
+    // Threads missing while messages exist is no longer a reason to re-sync at
+    // all: that is an interrupted run, and repairMissingThreadLabels rebuilds
+    // it from what is already on disk.
     if (result.messages.length === 0) {
-      const threadCount = await getThreadCountForAccount(accountId);
-      if (threadCount === 0) {
-        console.warn(`[syncManager] IMAP delta sync returned 0 new messages and DB has 0 threads for ${accountId} — forcing full re-sync`);
+      let storedNothing = false;
+      try {
+        const [threadCount, messageCount] = await Promise.all([
+          getThreadCountForAccount(accountId),
+          getMessageCountForAccount(accountId),
+        ]);
+        storedNothing = threadCount === 0 && messageCount === 0;
+      } catch (err) {
+        console.warn(
+          `[syncManager] Could not confirm whether ${accountId} is empty — skipping full re-sync:`,
+          err,
+        );
+      }
+
+      if (storedNothing) {
+        console.warn(`[syncManager] IMAP delta sync returned 0 new messages and ${accountId} has stored nothing — forcing full re-sync`);
         await clearAccountHistoryId(accountId);
         await clearAllFolderSyncStates(accountId);
         await imapInitialSync(accountId, syncDays, (progress) => {

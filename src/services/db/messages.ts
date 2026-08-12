@@ -172,3 +172,18 @@ export async function getRecentSentMessages(
     [accountId, accountEmail, limit],
   );
 }
+
+/**
+ * How many messages are stored for an account.
+ *
+ * Used to tell "this account has never synced" apart from "a query came back
+ * empty", before doing anything destructive with its sync state.
+ */
+export async function getMessageCountForAccount(accountId: string): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<{ count: number }[]>(
+    "SELECT COUNT(*) as count FROM messages WHERE account_id = $1",
+    [accountId],
+  );
+  return rows[0]?.count ?? 0;
+}

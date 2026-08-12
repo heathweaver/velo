@@ -23,6 +23,7 @@ import type { ParsedMessage, ParsedAttachment } from "../gmail/messageParser";
 import type { SyncResult } from "../email/types";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, setThreadLabels, deleteThread } from "../db/threads";
+import { repairMissingThreadLabels } from "./labelRepair";
 import { upsertAttachment } from "../db/attachments";
 import { getAccount, updateAccountSyncState } from "../db/accounts";
 import { withTransaction } from "../db/connection";
@@ -443,6 +444,8 @@ export async function imapInitialSync(
   // This ensures labels aren't lost when the threading algorithm deduplicates
   // messages that exist in multiple IMAP folders (e.g., INBOX + Sent).
   const labelsByRfcId = new Map<string, Set<string>>();
+
+  await repairMissingThreadLabels(accountId, syncableFolders);
 
   // Estimate total messages for progress
   let totalEstimate = 0;
@@ -882,6 +885,11 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
   const allFolders = await imapListFolders(config, "background");
   const syncableFolders = getSyncableFolders(allFolders);
   await syncFoldersToLabels(accountId, syncableFolders);
+
+  // Before deciding what to fetch, put back any labels an interrupted run
+  // failed to write — otherwise that mail stays stored but invisible, and no
+  // amount of syncing brings it back because it is never re-fetched.
+  await repairMissingThreadLabels(accountId, syncableFolders);
 
   const syncStateMap = new Map(syncStates.map((s) => [s.folder_path, s]));
 

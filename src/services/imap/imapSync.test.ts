@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // vi.mock() calls are hoisted — must use inline factories, not external references
+// The repair runs at the start of every sync; these tests are about fetching,
+// not recovery, so it stands aside.
+vi.mock("./labelRepair", () => ({
+  repairMissingThreadLabels: vi.fn(() => Promise.resolve(0)),
+}));
+
 vi.mock("./tauriCommands", () => ({
   imapListFolders: vi.fn(),
   imapGetFolderStatus: vi.fn(),
