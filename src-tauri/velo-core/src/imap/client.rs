@@ -18,6 +18,9 @@ const IMAP_CMD_TIMEOUT: Duration = Duration::from_secs(30);
 const IMAP_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 const IMAP_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 const OVERALL_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+// A pooled session that does not answer NOOP quickly is not worth waiting on —
+// reconnecting is faster than a long timeout on a dead socket.
+const NOOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Configure TCP keepalive and nodelay on a connected socket.
 fn configure_tcp_socket(stream: &TcpStream) {
@@ -171,6 +174,19 @@ async fn connect_inner(config: &ImapConfig) -> Result<ImapSession, String> {
             "IMAP authentication timed out after {}s — check your server settings or network connection",
             AUTH_TIMEOUT.as_secs()
         ))?
+}
+
+/// Cheap liveness check for a session that has been sitting idle.
+///
+/// Servers close idle IMAP connections without notifying the client, so a
+/// pooled session may be a dead socket. NOOP is the cheapest command that
+/// proves otherwise; a failure means reconnect rather than fail the caller's
+/// operation.
+pub async fn is_alive(session: &mut ImapSession) -> bool {
+    matches!(
+        tokio::time::timeout(NOOP_TIMEOUT, session.noop()).await,
+        Ok(Ok(()))
+    )
 }
 
 /// List all IMAP folders/mailboxes.
