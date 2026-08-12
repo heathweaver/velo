@@ -47,6 +47,7 @@ describe("folderSyncState", () => {
         last_uid: 100,
         modseq: 999,
         last_sync_at: 1700000000,
+        window_days: 30,
       };
       mockSelectFirstBy.mockResolvedValue(state);
 
@@ -78,6 +79,7 @@ describe("folderSyncState", () => {
         last_uid: 100,
         modseq: 999,
         last_sync_at: 1700000000,
+        window_days: 30,
       };
 
       await upsertFolderSyncState(state);
@@ -93,6 +95,7 @@ describe("folderSyncState", () => {
         100,
         999,
         1700000000,
+        30,
       ]);
     });
 
@@ -106,12 +109,15 @@ describe("folderSyncState", () => {
         last_uid: 0,
         modseq: null,
         last_sync_at: null,
+        // Null here is meaningful: a folder synced before the window was
+        // recorded is treated as the narrowest possible and rescanned once.
+        window_days: null,
       };
 
       await upsertFolderSyncState(state);
 
       const [, params] = mockExecute.mock.calls[0] as [string, unknown[]];
-      expect(params).toEqual(["acc-1", "Drafts", null, 0, null, null]);
+      expect(params).toEqual(["acc-1", "Drafts", null, 0, null, null, null]);
     });
 
     it("updates existing state on conflict (upsert)", async () => {
@@ -125,6 +131,7 @@ describe("folderSyncState", () => {
         last_uid: 100,
         modseq: 999,
         last_sync_at: 1700000000,
+        window_days: 30,
       };
       await upsertFolderSyncState(state1);
 
@@ -136,6 +143,7 @@ describe("folderSyncState", () => {
         last_uid: 200,
         modseq: 1500,
         last_sync_at: 1700001000,
+        window_days: 30,
       };
       await upsertFolderSyncState(state2);
 
@@ -148,6 +156,7 @@ describe("folderSyncState", () => {
         200,
         1500,
         1700001000,
+        30,
       ]);
     });
   });

@@ -680,6 +680,7 @@ export async function imapInitialSync(
         last_uid: lastUid,
         modseq: null,
         last_sync_at: Math.floor(Date.now() / 1000),
+        window_days: daysBack,
       });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
@@ -837,6 +838,35 @@ export async function imapInitialSync(
  * Perform delta sync for an IMAP account.
  * Fetches only new messages since the last sync using stored UID state.
  */
+/**
+ * How far back a sync window reaches, for comparing two of them.
+ *
+ * 0 means "everything", so it sorts above every finite window.
+ */
+function windowReach(days: number | null | undefined): number {
+  if (days === null || days === undefined) return 0;
+  return days <= 0 ? Number.POSITIVE_INFINITY : days;
+}
+
+/**
+ * Whether a folder has to be walked from the beginning again.
+ *
+ * last_uid advances past every message fetched, including the ones the date
+ * filter discarded, so a folder walked under a narrow window has everything
+ * older sitting below the high-water mark where delta sync will never look.
+ * Widening the window therefore cannot be honoured by asking for new UIDs — the
+ * missing mail is *older*, not newer, and the folder needs a full pass.
+ *
+ * A folder with no recorded window predates this being tracked, so it is
+ * treated as the narrowest possible and rescanned once.
+ */
+export function needsFullRescan(
+  storedWindowDays: number | null | undefined,
+  currentWindowDays: number,
+): boolean {
+  return windowReach(currentWindowDays) > windowReach(storedWindowDays);
+}
+
 export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<SyncResult> {
   const account = await getAccount(accountId);
   if (!account) {
@@ -860,8 +890,27 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
   const allImapMsgs = new Map<string, ImapMessage>();
 
   // Separate folders into new (no saved state) vs existing (have saved state)
-  const newFolders = syncableFolders.filter((f) => !syncStateMap.has(f.raw_path));
-  const existingFolders = syncableFolders.filter((f) => syncStateMap.has(f.raw_path));
+  // A folder whose window has widened is walked from scratch rather than
+  // asked for new UIDs: the mail it is missing is older than its high-water
+  // mark, so a delta check would report nothing to do and the gap would
+  // persist for good.
+  const rescanFolders = syncableFolders.filter((f) => {
+    const state = syncStateMap.get(f.raw_path);
+    return state !== undefined && needsFullRescan(state.window_days, daysBack);
+  });
+  if (rescanFolders.length > 0) {
+    console.log(
+      `[imapSync] Sync window widened — rescanning ${rescanFolders.length} folder(s) from the start`,
+    );
+  }
+  const rescanPaths = new Set(rescanFolders.map((f) => f.raw_path));
+
+  const newFolders = syncableFolders.filter(
+    (f) => !syncStateMap.has(f.raw_path) || rescanPaths.has(f.raw_path),
+  );
+  const existingFolders = syncableFolders.filter(
+    (f) => syncStateMap.has(f.raw_path) && !rescanPaths.has(f.raw_path),
+  );
 
   // Handle new folders: search for UIDs then fetch in chunks
   let consecutiveFailures = 0;
@@ -910,6 +959,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
         last_uid: lastUid,
         modseq: null,
         last_sync_at: Math.floor(Date.now() / 1000),
+        window_days: daysBack,
       });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
@@ -1015,6 +1065,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
             last_uid: lastUid,
             modseq: null,
             last_sync_at: Math.floor(Date.now() / 1000),
+            window_days: daysBack,
           });
           continue;
         }
@@ -1046,6 +1097,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
           last_uid: Math.max(savedState.last_uid, lastUid),
           modseq: null,
           last_sync_at: Math.floor(Date.now() / 1000),
+          window_days: daysBack,
         });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");

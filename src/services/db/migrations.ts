@@ -821,6 +821,19 @@ const MIGRATIONS = [
         ('Newsletters', 'Newsletters', 'Newsletters, digests, and blog updates I subscribed to and want to read.', 'Newspaper', 4, 1, 0);
     `,
   },
+  {
+    version: 27,
+    description:
+      "Record which sync window each folder was last synced under. last_uid " +
+      "advances past every message fetched, including those the date filter " +
+      "discards, so a folder synced under a 30-day window leaves everything " +
+      "older permanently below the high-water mark — invisible to delta sync, " +
+      "with no automatic way back. Storing the window lets a widened setting " +
+      "force a rescan of the folders that need one. NULL means the window is " +
+      "unknown, which is treated as the narrowest possible so existing folders " +
+      "rescan once.",
+    sql: `ALTER TABLE folder_sync_state ADD COLUMN window_days INTEGER;`,
+  },
 ];
 
 /**

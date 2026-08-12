@@ -7,6 +7,17 @@ export interface FolderSyncState {
   last_uid: number;
   modseq: number | null;
   last_sync_at: number | null;
+  /**
+   * The sync window this folder was last walked under, in days (0 = everything).
+   *
+   * last_uid advances past every message fetched, including the ones the date
+   * filter discards, so a folder walked under a narrow window hides everything
+   * older behind the high-water mark. Recording the window is what lets a
+   * widened setting detect which folders need a rescan. Null means unknown —
+   * treated as the narrowest possible, so folders synced before this existed
+   * rescan once.
+   */
+  window_days: number | null;
 }
 
 export async function getFolderSyncState(
@@ -24,10 +35,10 @@ export async function upsertFolderSyncState(
 ): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `INSERT INTO folder_sync_state (account_id, folder_path, uidvalidity, last_uid, modseq, last_sync_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO folder_sync_state (account_id, folder_path, uidvalidity, last_uid, modseq, last_sync_at, window_days)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT(account_id, folder_path) DO UPDATE SET
-       uidvalidity = $3, last_uid = $4, modseq = $5, last_sync_at = $6`,
+       uidvalidity = $3, last_uid = $4, modseq = $5, last_sync_at = $6, window_days = $7`,
     [
       state.account_id,
       state.folder_path,
@@ -35,6 +46,7 @@ export async function upsertFolderSyncState(
       state.last_uid,
       state.modseq,
       state.last_sync_at,
+      state.window_days,
     ],
   );
 }
