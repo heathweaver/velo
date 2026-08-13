@@ -8,6 +8,7 @@ pub mod imap;
 pub mod oauth;
 pub mod ops;
 pub mod smtp;
+pub mod store;
 
 // Re-export the config/result types most commonly needed by callers.
 pub use imap::types::{

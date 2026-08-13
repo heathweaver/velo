@@ -69,6 +69,16 @@ vi.mock("../db/folderSyncState", () => ({
 vi.mock("../db/pendingOperations", () => ({
   getPendingOpsForResource: vi.fn(() => []),
 }));
+// The desktop hands whole chunks to Rust; the web path writes row by row. Which
+// one runs is decided by the transport, so these tests can pick.
+const mockIsTauri = vi.fn(() => false);
+const mockTransportInvoke = vi.fn(() => Promise.resolve(0));
+vi.mock("../transport", () => ({
+  isTauri: () => mockIsTauri(),
+  getTransport: () => ({
+    invoke: (...args: unknown[]) => mockTransportInvoke(...(args as [])),
+  }),
+}));
 
 import { imapMessageToParsedMessage, imapInitialSync, imapDeltaSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
 import {
@@ -879,5 +889,73 @@ describe("imapDeltaSync", () => {
 
     expect(result.storedCount).toBe(0);
     expect(mockUpsertMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("chunk storage transport", () => {
+  const mockImapListFolders = vi.mocked(imapListFolders);
+  const mockImapSearchFolder = vi.mocked(imapSearchFolder);
+  const mockImapFetchMessages = vi.mocked(imapFetchMessages);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAccount).mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    const msg = createMockImapMessage({
+      uid: 7,
+      message_id: "<t1@test>",
+      subject: "Chunked",
+      date: Math.floor(Date.now() / 1000),
+    });
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: 1 }),
+    ]);
+    mockImapSearchFolder.mockResolvedValue({
+      uids: [7],
+      folder_status: createMockImapFolderStatus({ exists: 1 }),
+    });
+    mockImapFetchMessages.mockResolvedValue(createMockImapFetchResult([msg]));
+  });
+
+  afterEach(() => {
+    mockIsTauri.mockReturnValue(false);
+    mockImapFetchMessages.mockReset();
+    mockImapListFolders.mockReset();
+    mockImapSearchFolder.mockReset();
+  });
+
+  it("sends the whole chunk to Rust in one call on the desktop", async () => {
+    // The point of the move: one crossing of the IPC boundary per chunk instead
+    // of a statement per row, and a real transaction around it.
+    mockIsTauri.mockReturnValue(true);
+
+    await imapInitialSync("acc-1");
+
+    expect(mockTransportInvoke).toHaveBeenCalledWith(
+      "db_store_chunk",
+      expect.objectContaining({ messages: expect.any(Array) }),
+    );
+    const [, args] = mockTransportInvoke.mock.calls[0] as [string, { messages: unknown[] }];
+    expect(args.messages).toHaveLength(1);
+    expect(args.messages[0]).toMatchObject({
+      id: expect.stringContaining("INBOX"),
+      accountId: "acc-1",
+      subject: "Chunked",
+      imapUid: 7,
+      imapFolder: "INBOX",
+    });
+    // The row-by-row path must not also run.
+    expect(vi.mocked(upsertMessage)).not.toHaveBeenCalled();
+  });
+
+  it("still writes row by row where there is no Rust to call", async () => {
+    // The web build talks to the SQL gateway over HTTP and has no command to
+    // invoke, so it keeps the original path.
+    mockIsTauri.mockReturnValue(false);
+
+    await imapInitialSync("acc-1");
+
+    expect(mockTransportInvoke).not.toHaveBeenCalled();
+    expect(vi.mocked(upsertMessage)).toHaveBeenCalledTimes(1);
   });
 });

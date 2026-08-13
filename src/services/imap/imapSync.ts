@@ -37,6 +37,7 @@ import {
   type ThreadableMessage,
 } from "../threading/threadBuilder";
 import { getPendingOpsForResource } from "../db/pendingOperations";
+import { getTransport, isTauri } from "../transport";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -237,6 +238,56 @@ interface MessageMeta {
   date: number;
 }
 
+
+/**
+ * Shape a parsed message for the Rust storage command.
+ *
+ * Field names are what serde expects on the other side; the placeholder thread
+ * is derived there from the message itself, so it is not sent separately.
+ */
+function toStoredMessage(accountId: string, parsed: ParsedMessage, msg: ImapMessage) {
+  return {
+    id: parsed.id,
+    accountId,
+    threadId: parsed.id,
+    fromAddress: parsed.fromAddress,
+    fromName: parsed.fromName,
+    toAddresses: parsed.toAddresses,
+    ccAddresses: parsed.ccAddresses,
+    bccAddresses: parsed.bccAddresses,
+    replyTo: parsed.replyTo,
+    subject: parsed.subject,
+    snippet: parsed.snippet,
+    date: parsed.date,
+    isRead: parsed.isRead,
+    isStarred: parsed.isStarred,
+    hasAttachments: parsed.hasAttachments,
+    bodyHtml: parsed.bodyHtml,
+    bodyText: parsed.bodyText,
+    rawSize: parsed.rawSize,
+    internalDate: parsed.internalDate,
+    listUnsubscribe: parsed.listUnsubscribe ?? null,
+    listUnsubscribePost: parsed.listUnsubscribePost ?? null,
+    authResults: parsed.authResults ?? null,
+    messageIdHeader: msg.message_id ?? null,
+    referencesHeader: msg.references ?? null,
+    inReplyToHeader: msg.in_reply_to ?? null,
+    imapUid: msg.uid ?? null,
+    imapFolder: msg.folder ?? null,
+    attachments: parsed.attachments.map((att) => ({
+      id: `${parsed.id}_${att.gmailAttachmentId}`,
+      messageId: parsed.id,
+      accountId,
+      filename: att.filename,
+      mimeType: att.mimeType,
+      size: att.size,
+      gmailAttachmentId: att.gmailAttachmentId,
+      contentId: att.contentId,
+      isInline: att.isInline,
+    })),
+  };
+}
+
 /**
  * Write one fetched chunk to disk and keep only what threading needs.
  *
@@ -251,9 +302,19 @@ async function storeChunk(
   allThreadable: ThreadableMessage[],
   labelsByRfcId: Map<string, Set<string>>,
 ): Promise<void> {
-  // Write entire chunk to DB in a single transaction
   if (chunkParsed.length > 0) {
+    // Serialised against every other writer, but no BEGIN is issued here — see
+    // withTransaction. On the desktop the whole chunk goes to Rust as one call,
+    // which does wrap it in a real transaction; the web path still writes row by
+    // row through the SQL gateway.
     await withTransaction(async () => {
+      if (isTauri()) {
+        await getTransport().invoke("db_store_chunk", {
+          messages: chunkParsed.map(({ parsed, msg }) => toStoredMessage(accountId, parsed, msg)),
+        });
+        return;
+      }
+
       for (const { parsed, msg } of chunkParsed) {
         // Create placeholder thread first to satisfy FK constraint
         await upsertThread({

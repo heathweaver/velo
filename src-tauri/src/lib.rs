@@ -112,6 +112,7 @@ pub fn run() {
             commands::imap_delta_check,
             commands::smtp_send_email,
             commands::smtp_test_connection,
+            commands::db_store_chunk,
         ])
         .setup(|app| {
             {
