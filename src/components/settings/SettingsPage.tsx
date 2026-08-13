@@ -58,7 +58,7 @@ import {
   type SendAsAlias,
 } from "@/services/db/sendAsAliases";
 import { ALL_NAV_ITEMS } from "@/components/layout/Sidebar";
-import type { SidebarNavItem, MarkAsReadBehavior } from "@/stores/uiStore";
+import type { SidebarNavItem, MarkAsReadBehavior, ThreadSortOrder } from "@/stores/uiStore";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
@@ -102,6 +102,8 @@ export function SettingsPage() {
   const defaultReplyMode = useUIStore((s) => s.defaultReplyMode);
   const setDefaultReplyMode = useUIStore((s) => s.setDefaultReplyMode);
   const markAsReadBehavior = useUIStore((s) => s.markAsReadBehavior);
+  const threadSortOrder = useUIStore((s) => s.threadSortOrder);
+  const setThreadSortOrder = useUIStore((s) => s.setThreadSortOrder);
   const setMarkAsReadBehavior = useUIStore((s) => s.setMarkAsReadBehavior);
   const sendAndArchive = useUIStore((s) => s.sendAndArchive);
   const setSendAndArchive = useUIStore((s) => s.setSendAndArchive);
@@ -778,6 +780,18 @@ export function SettingsPage() {
                       >
                         <option value="reply">Reply</option>
                         <option value="replyAll">Reply All</option>
+                      </select>
+                    </SettingRow>
+                    <SettingRow label="Message order">
+                      <select
+                        value={threadSortOrder}
+                        onChange={(e) => {
+                          setThreadSortOrder(e.target.value as ThreadSortOrder);
+                        }}
+                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                      >
+                        <option value="newest">Newest first</option>
+                        <option value="oldest">Oldest first</option>
                       </select>
                     </SettingRow>
                     <SettingRow label="Mark as read">

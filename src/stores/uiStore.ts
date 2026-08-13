@@ -7,6 +7,15 @@ type ReadingPanePosition = "right" | "bottom" | "hidden";
 type ReadFilter = "all" | "read" | "unread";
 export type EmailDensity = "compact" | "default" | "spacious";
 export type DefaultReplyMode = "reply" | "replyAll";
+/**
+ * Which end of a thread the newest message sits at.
+ *
+ * Chronological reads like a transcript, which is right for printing one and
+ * wrong for using one: the message you opened the thread for is the newest, and
+ * in a long thread it was at the bottom, below everything already read.
+ */
+export type ThreadSortOrder = "newest" | "oldest";
+
 export type MarkAsReadBehavior = "instant" | "delayed" | "manual";
 
 /**
@@ -51,6 +60,7 @@ interface UIState {
   emailDensity: EmailDensity;
   defaultReplyMode: DefaultReplyMode;
   markAsReadBehavior: MarkAsReadBehavior;
+  threadSortOrder: ThreadSortOrder;
   fontScale: FontScale;
   colorTheme: ColorThemeId;
   sendAndArchive: boolean;
@@ -78,6 +88,7 @@ interface UIState {
   setEmailDensity: (density: EmailDensity) => void;
   setDefaultReplyMode: (mode: DefaultReplyMode) => void;
   setMarkAsReadBehavior: (behavior: MarkAsReadBehavior) => void;
+  setThreadSortOrder: (order: ThreadSortOrder) => void;
   setFontScale: (scale: FontScale) => void;
   setColorTheme: (theme: ColorThemeId) => void;
   setSendAndArchive: (enabled: boolean) => void;
@@ -103,6 +114,7 @@ export const useUIStore = create<UIState>((set) => ({
   emailDensity: "default",
   defaultReplyMode: "reply",
   markAsReadBehavior: "delayed",
+  threadSortOrder: "newest",
   fontScale: "default",
   colorTheme: "indigo",
   sendAndArchive: false,
@@ -153,6 +165,10 @@ export const useUIStore = create<UIState>((set) => ({
   setMarkAsReadBehavior: (markAsReadBehavior) => {
     setSetting("mark_as_read_behavior", markAsReadBehavior).catch(() => {});
     set({ markAsReadBehavior });
+  },
+  setThreadSortOrder: (threadSortOrder) => {
+    setSetting("thread_sort_order", threadSortOrder).catch(() => {});
+    set({ threadSortOrder });
   },
   setFontScale: (fontScale) => {
     setSetting("font_size", fontScale).catch(() => {});

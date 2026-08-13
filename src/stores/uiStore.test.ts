@@ -120,6 +120,16 @@ describe("uiStore", () => {
     expect(useUIStore.getState().markAsReadBehavior).toBe("manual");
   });
 
+  it("setThreadSortOrder should persist to DB and update state", () => {
+    // Newest first by default: the message you opened the thread for is the
+    // newest one, and chronological order buries it at the bottom.
+    expect(useUIStore.getState().threadSortOrder).toBe("newest");
+
+    useUIStore.getState().setThreadSortOrder("oldest");
+    expect(setSetting).toHaveBeenCalledWith("thread_sort_order", "oldest");
+    expect(useUIStore.getState().threadSortOrder).toBe("oldest");
+  });
+
   it("setFontScale should persist to DB and update state", () => {
     expect(useUIStore.getState().fontScale).toBe("default");
 

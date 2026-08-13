@@ -269,6 +269,12 @@ export default function App() {
           ui.setMarkAsReadBehavior(savedMarkRead);
         }
 
+        // Restore thread sort order
+        const savedSortOrder = await getSetting("thread_sort_order");
+        if (savedSortOrder === "newest" || savedSortOrder === "oldest") {
+          ui.setThreadSortOrder(savedSortOrder);
+        }
+
         // Restore send and archive
         const savedSendArchive = await getSetting("send_and_archive");
         if (savedSendArchive === "true") {

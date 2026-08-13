@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
@@ -244,6 +244,19 @@ export function ThreadView({ thread }: ThreadViewProps) {
   }, [messages, thread.subject]);
 
   // Message-level keyboard navigation (ArrowUp / ArrowDown)
+  /**
+   * The messages in reading order.
+   *
+   * `messages` itself stays chronological, because print, .eml export and
+   * "reply to the last message" all mean the real order regardless of how the
+   * thread is displayed.
+   */
+  const threadSortOrder = useUIStore((s) => s.threadSortOrder);
+  const displayMessages = useMemo(
+    () => (threadSortOrder === "newest" ? [...messages].reverse() : messages),
+    [messages, threadSortOrder],
+  );
+
   const [focusedMsgIdx, setFocusedMsgIdx] = useState(-1);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -393,6 +406,38 @@ export function ThreadView({ thread }: ThreadViewProps) {
   // Detect no-reply senders — disable reply buttons but still allow forward
   const noReply = isNoReplyAddress(lastMessage?.reply_to ?? lastMessage?.from_address);
 
+  /**
+   * Reply box and suggestions, kept next to the newest message.
+   *
+   * You reply to the newest message, so the box belongs beside it. At the
+   * bottom of a newest-first thread it sat under everything already read,
+   * which meant scrolling the whole conversation to answer it.
+   */
+  const replyBlock = threadAccountId ? (
+    <>
+      {messages.length > 0 && (
+        <SmartReplySuggestions
+          threadId={thread.id}
+          accountId={threadAccountId}
+          messages={messages}
+          noReply={noReply}
+        />
+      )}
+      <InlineReply
+        thread={thread}
+        messages={messages}
+        accountId={threadAccountId}
+        noReply={noReply}
+        onSent={() => {
+          // Reload messages after sending
+          getMessagesForThread(threadAccountId, thread.id)
+            .then(setMessages)
+            .catch(console.error);
+        }}
+      />
+    </>
+  ) : null;
+
   // Get the primary sender for the contact sidebar
   const primarySender = lastMessage?.from_address ?? null;
   const primarySenderName = lastMessage?.from_name ?? null;
@@ -450,8 +495,10 @@ export function ThreadView({ thread }: ThreadViewProps) {
           thread; the gutter makes each message a discrete object.
         */}
         <div className="flex-1 overflow-y-auto bg-bg-tertiary p-2 space-y-2">
+          {threadSortOrder === "newest" && replyBlock}
+
           <ErrorBoundary name="MessageList">
-            {messages.map((msg, i) => (
+            {displayMessages.map((msg, i) => (
               <MessageItem
                 key={msg.id}
                 ref={(el) => { messageRefs.current[i] = el; }}
@@ -467,31 +514,7 @@ export function ThreadView({ thread }: ThreadViewProps) {
             ))}
           </ErrorBoundary>
 
-          {/* Smart Reply Suggestions */}
-          {threadAccountId && messages.length > 0 && (
-            <SmartReplySuggestions
-              threadId={thread.id}
-              accountId={threadAccountId}
-              messages={messages}
-              noReply={noReply}
-            />
-          )}
-
-          {/* Inline Reply */}
-          {threadAccountId && (
-            <InlineReply
-              thread={thread}
-              messages={messages}
-              accountId={threadAccountId}
-              noReply={noReply}
-              onSent={() => {
-                // Reload messages after sending
-                getMessagesForThread(threadAccountId, thread.id)
-                  .then(setMessages)
-                  .catch(console.error);
-              }}
-            />
-          )}
+          {threadSortOrder === "oldest" && replyBlock}
         </div>
       </div>
 
