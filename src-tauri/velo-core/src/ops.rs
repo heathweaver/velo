@@ -201,6 +201,17 @@ pub async fn imap_set_flags(
     Ok(())
 }
 
+pub async fn imap_create_folder(
+    config: ImapConfig,
+    folder: String,
+    priority: Priority,
+) -> Result<(), String> {
+    let (mut session, turn) = checkout(&config, priority).await?;
+    imap_client::create_folder(&mut session, &folder).await?;
+    checkin(&config, session, turn).await;
+    Ok(())
+}
+
 pub async fn imap_move_messages(
     config: ImapConfig,
     folder: String,

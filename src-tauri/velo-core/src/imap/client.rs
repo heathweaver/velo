@@ -512,6 +512,32 @@ async fn uids_still_present(
     Ok(result)
 }
 
+/// Create a mailbox on the server.
+///
+/// Succeeds quietly when the mailbox already exists: servers report that as an
+/// error, and for a caller that only wants the folder to exist afterwards it is
+/// the same outcome as having created it. Distinguishing the two would make
+/// every caller handle a race it cannot win — another client may create the
+/// folder between the check and the command.
+pub async fn create_folder(session: &mut ImapSession, folder: &str) -> Result<(), String> {
+    match tokio::time::timeout(IMAP_CMD_TIMEOUT, session.create(folder)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            let message = e.to_string();
+            let lowered = message.to_lowercase();
+            if lowered.contains("already exists") || lowered.contains("alreadyexists") {
+                Ok(())
+            } else {
+                Err(format!("CREATE {folder} failed: {message}"))
+            }
+        }
+        Err(_) => Err(format!(
+            "CREATE {folder} timed out after {}s — check your server settings or network connection",
+            IMAP_CMD_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// Move messages between folders.
 ///
 /// Tries MOVE first; falls back to COPY + flag Deleted + EXPUNGE, and confirms

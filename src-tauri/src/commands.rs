@@ -84,6 +84,15 @@ pub async fn imap_set_flags(
 }
 
 #[tauri::command]
+pub async fn imap_create_folder(
+    config: ImapConfig,
+    folder: String,
+    priority: Option<String>,
+) -> Result<(), String> {
+    ops::imap_create_folder(config, folder, Priority::from_label(priority.as_deref())).await
+}
+
+#[tauri::command]
 pub async fn imap_move_messages(
     config: ImapConfig,
     folder: String,
