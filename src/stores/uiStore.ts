@@ -7,7 +7,22 @@ type ReadingPanePosition = "right" | "bottom" | "hidden";
 type ReadFilter = "all" | "read" | "unread";
 export type EmailDensity = "compact" | "default" | "spacious";
 export type DefaultReplyMode = "reply" | "replyAll";
-export type MarkAsReadBehavior = "instant" | "2s" | "manual";
+export type MarkAsReadBehavior = "instant" | "delayed" | "manual";
+
+/**
+ * How long a message must stay on screen, fully rendered, before it counts as
+ * read.
+ *
+ * The delay is what separates reading a message from passing over it. Marking
+ * on selection meant cursoring down ten messages with the keyboard marked all
+ * ten read, none of which had been read. Three seconds is in line with what
+ * other clients settle on — Outlook and Thunderbird default to five, Gmail's
+ * reading pane to three.
+ *
+ * Named rather than encoded in the stored setting, so changing it does not
+ * strand everyone's saved preference on an old number.
+ */
+export const MARK_READ_DELAY_MS = 3000;
 export type FontScale = "small" | "default" | "large" | "xlarge";
 /**
  * How the inbox is divided into Gmail-style category tabs. This is unrelated to
@@ -87,7 +102,7 @@ export const useUIStore = create<UIState>((set) => ({
   emailListWidth: 320,
   emailDensity: "default",
   defaultReplyMode: "reply",
-  markAsReadBehavior: "instant",
+  markAsReadBehavior: "delayed",
   fontScale: "default",
   colorTheme: "indigo",
   sendAndArchive: false,

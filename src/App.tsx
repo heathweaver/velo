@@ -257,7 +257,15 @@ export default function App() {
 
         // Restore mark-as-read behavior
         const savedMarkRead = await getSetting("mark_as_read_behavior");
-        if (savedMarkRead === "instant" || savedMarkRead === "2s" || savedMarkRead === "manual") {
+        // "2s" is what the delay option used to be called, back when the wait
+        // was part of its name.
+        if (savedMarkRead === "2s") {
+          ui.setMarkAsReadBehavior("delayed");
+        } else if (
+          savedMarkRead === "instant" ||
+          savedMarkRead === "delayed" ||
+          savedMarkRead === "manual"
+        ) {
           ui.setMarkAsReadBehavior(savedMarkRead);
         }
 

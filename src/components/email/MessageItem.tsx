@@ -19,9 +19,11 @@ interface MessageItemProps {
   isSpam?: boolean;
   focused?: boolean;
   onContextMenu?: (e: React.MouseEvent) => void;
+  /** Fired once this message's body is on screen. */
+  onRendered?: () => void;
 }
 
-export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu }, ref) {
+export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu, onRendered }, ref) {
   // Threads read as a conversation, so every message starts open. Clicking a
   // header still collapses it.
   const [expanded, setExpanded] = useState(true);
@@ -147,6 +149,7 @@ export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(fun
               senderAllowlisted={senderAllowlisted}
               messageId={message.id}
               inlineAttachments={attachments.filter((a) => a.content_id)}
+              onRendered={onRendered}
             />
           ) : (
             <div className="py-8 text-center text-text-tertiary text-sm">Loading...</div>

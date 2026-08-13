@@ -16,6 +16,11 @@ interface EmailRendererProps {
   senderAllowlisted?: boolean;
   messageId?: string | null;
   inlineAttachments?: DbAttachment[];
+  /**
+   * Fired once the body is written and laid out — the point at which there is
+   * something on screen to read.
+   */
+  onRendered?: () => void;
 }
 
 export function EmailRenderer({
@@ -27,8 +32,13 @@ export function EmailRenderer({
   senderAllowlisted = false,
   messageId,
   inlineAttachments,
+  onRendered,
 }: EmailRendererProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Held in a ref so a caller passing an inline function cannot re-run the
+  // effect that writes the document.
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
   const observerRef = useRef<ResizeObserver | null>(null);
   const rafRef = useRef<number>(0);
   const [overrideShow, setOverrideShow] = useState(false);
@@ -163,11 +173,16 @@ export function EmailRenderer({
     doc.close();
 
     // Calculate and set height synchronously before paint
+    let announced = false;
     const applyHeight = () => {
       if (!doc.body) return;
       const h = doc.body.scrollHeight;
       if (h > 0) {
         iframe.style.height = h + "px";
+        if (!announced) {
+          announced = true;
+          onRenderedRef.current?.();
+        }
       }
     };
     applyHeight();

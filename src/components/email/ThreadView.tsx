@@ -4,7 +4,8 @@ import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useThreadStore, type Thread } from "@/stores/threadStore";
+import { useMarkReadWhenRead } from "@/hooks/useMarkReadWhenRead";
+import type { Thread } from "@/stores/threadStore";
 import { useComposerStore } from "@/stores/composerStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { markThreadRead } from "@/services/emailActions";
@@ -75,7 +76,6 @@ export function ThreadView({ thread }: ThreadViewProps) {
   const toggleContactSidebar = useUIStore((s) => s.toggleContactSidebar);
   const taskSidebarVisible = useUIStore((s) => s.taskSidebarVisible);
   const [showTaskExtract, setShowTaskExtract] = useState(false);
-  const updateThread = useThreadStore((s) => s.updateThread);
   const [messages, setMessages] = useState<DbMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const markedReadRef = useRef<string | null>(null);
@@ -116,27 +116,35 @@ export function ThreadView({ thread }: ThreadViewProps) {
     return () => { cancelled = true; };
   }, [threadAccountId, messages]);
 
-  // Auto-mark unread threads as read when opened (respects mark-as-read setting)
   const markAsReadBehavior = useUIStore((s) => s.markAsReadBehavior);
+
+  /**
+   * Whether this thread's body has actually appeared on screen.
+   *
+   * The wait is counted from the message being rendered, not from the thread
+   * being opened: a large message can take a moment to lay out, and a timer
+   * started before then can expire while there is still nothing to read.
+   */
+  const [bodyRendered, setBodyRendered] = useState(false);
   useEffect(() => {
-    if (!threadAccountId || thread.isRead || markedReadRef.current === thread.id) return;
-    if (markAsReadBehavior === "manual") return;
+    setBodyRendered(false);
+  }, [thread.id]);
+  const handleMessageRendered = useCallback(() => setBodyRendered(true), []);
 
-    const markRead = () => {
-      markedReadRef.current = thread.id;
-      markThreadRead(threadAccountId, thread.id, [], true).catch((err) => {
-        console.error("Failed to mark thread as read:", err);
-      });
-    };
+  const markRead = useCallback(() => {
+    if (!threadAccountId || markedReadRef.current === thread.id) return;
+    markedReadRef.current = thread.id;
+    markThreadRead(threadAccountId, thread.id, [], true).catch((err) => {
+      console.error("Failed to mark thread as read:", err);
+    });
+  }, [threadAccountId, thread.id]);
 
-    if (markAsReadBehavior === "2s") {
-      const timer = setTimeout(markRead, 2000);
-      return () => clearTimeout(timer);
-    }
-
-    // instant
-    markRead();
-  }, [threadAccountId, thread.id, thread.isRead, updateThread, markAsReadBehavior]);
+  useMarkReadWhenRead({
+    behavior: markAsReadBehavior,
+    isRead: thread.isRead,
+    bodyRendered,
+    onMark: markRead,
+  });
 
   const openComposer = useComposerStore((s) => s.openComposer);
   const openMenu = useContextMenuStore((s) => s.openMenu);
@@ -454,6 +462,7 @@ export function ThreadView({ thread }: ThreadViewProps) {
                 senderAllowlisted={msg.from_address ? allowlistedSenders.has(msg.from_address) : false}
                 isSpam={thread.labelIds.includes("SPAM")}
                 onContextMenu={(e) => handleMessageContextMenu(e, msg)}
+                onRendered={i === 0 ? handleMessageRendered : undefined}
               />
             ))}
           </ErrorBoundary>

@@ -107,11 +107,13 @@ describe("uiStore", () => {
   });
 
   it("setMarkAsReadBehavior should persist to DB and update state", () => {
-    expect(useUIStore.getState().markAsReadBehavior).toBe("instant");
+    // Waiting is the default: marking on selection turned cursoring through a
+    // list into marking everything in it read.
+    expect(useUIStore.getState().markAsReadBehavior).toBe("delayed");
 
-    useUIStore.getState().setMarkAsReadBehavior("2s");
-    expect(setSetting).toHaveBeenCalledWith("mark_as_read_behavior", "2s");
-    expect(useUIStore.getState().markAsReadBehavior).toBe("2s");
+    useUIStore.getState().setMarkAsReadBehavior("instant");
+    expect(setSetting).toHaveBeenCalledWith("mark_as_read_behavior", "instant");
+    expect(useUIStore.getState().markAsReadBehavior).toBe("instant");
 
     useUIStore.getState().setMarkAsReadBehavior("manual");
     expect(setSetting).toHaveBeenCalledWith("mark_as_read_behavior", "manual");

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "@tanstack/react-router";
-import { useUIStore } from "@/stores/uiStore";
+import { useUIStore, MARK_READ_DELAY_MS } from "@/stores/uiStore";
 import { navigateToLabel, navigateToSettings } from "@/router/navigate";
 import { useAccountStore } from "@/stores/accountStore";
 import { getSetting, setSetting, getSecureSetting, setSecureSetting } from "@/services/db/settings";
@@ -58,7 +58,7 @@ import {
   type SendAsAlias,
 } from "@/services/db/sendAsAliases";
 import { ALL_NAV_ITEMS } from "@/components/layout/Sidebar";
-import type { SidebarNavItem } from "@/stores/uiStore";
+import type { SidebarNavItem, MarkAsReadBehavior } from "@/stores/uiStore";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 
@@ -784,12 +784,14 @@ export function SettingsPage() {
                       <select
                         value={markAsReadBehavior}
                         onChange={(e) => {
-                          setMarkAsReadBehavior(e.target.value as "instant" | "2s" | "manual");
+                          setMarkAsReadBehavior(e.target.value as MarkAsReadBehavior);
                         }}
                         className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
+                        <option value="delayed">
+                          After {MARK_READ_DELAY_MS / 1000} seconds on screen
+                        </option>
                         <option value="instant">Instantly</option>
-                        <option value="2s">After 2 seconds</option>
                         <option value="manual">Manually</option>
                       </select>
                     </SettingRow>
