@@ -67,7 +67,7 @@ vi.mock("../db/folderSyncState", () => ({
   getAllFolderSyncStates: vi.fn(),
 }));
 vi.mock("../db/pendingOperations", () => ({
-  getPendingOpsForResource: vi.fn(() => []),
+  getResourcesWithPendingOps: vi.fn(() => new Set<string>()),
 }));
 // The desktop hands whole chunks to Rust; the web path writes row by row. Which
 // one runs is decided by the transport, so these tests can pick.
@@ -94,7 +94,7 @@ import { withTransaction } from "../db/connection";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, deleteThread } from "../db/threads";
 import { upsertAttachment } from "../db/attachments";
-import { getPendingOpsForResource } from "../db/pendingOperations";
+import { getResourcesWithPendingOps } from "../db/pendingOperations";
 import { getAllFolderSyncStates } from "../db/folderSyncState";
 
 describe("imapMessageToParsedMessage", () => {
@@ -279,7 +279,7 @@ describe("imapInitialSync", () => {
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
     // clearAllMocks clears calls, not implementations, so a test that stubs
     // pending ops would otherwise leak "everything is skipped" into the rest.
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -379,9 +379,7 @@ describe("imapInitialSync", () => {
     // an orphan deletes the mail itself.
     const msg = createMockImapMessage({ uid: 1, message_id: "<m1@test>", date: Math.floor(Date.now() / 1000) });
     setupFolderWithMessages("INBOX", [msg]);
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([
-      { id: "op-1" },
-    ] as never);
+    vi.mocked(getResourcesWithPendingOps).mockImplementation(async (_a, ids) => new Set(ids));
 
     await imapInitialSync("acc-1");
 
@@ -536,7 +534,7 @@ describe("imapInitialSync", () => {
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
     // clearAllMocks clears calls, not implementations, so a test that stubs
     // pending ops would otherwise leak "everything is skipped" into the rest.
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
 
     const msgs = Array.from({ length: 2 }, (_, i) =>
       createMockImapMessage({ uid: i + 1, message_id: `<m${i}@test>`, date: Math.floor(Date.now() / 1000) }),
@@ -722,7 +720,7 @@ describe("imapInitialSync — all-folders-fail propagation", () => {
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
     // clearAllMocks clears calls, not implementations, so a test that stubs
     // pending ops would otherwise leak "everything is skipped" into the rest.
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -764,7 +762,7 @@ describe("imapInitialSync — placeholder cleanup", () => {
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
     // clearAllMocks clears calls, not implementations, so a test that stubs
     // pending ops would otherwise leak "everything is skipped" into the rest.
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -843,7 +841,7 @@ describe("imapDeltaSync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -900,7 +898,7 @@ describe("chunk storage transport", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAccount).mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
-    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
     const msg = createMockImapMessage({
       uid: 7,
       message_id: "<t1@test>",

@@ -36,7 +36,7 @@ import {
   buildThreads,
   type ThreadableMessage,
 } from "../threading/threadBuilder";
-import { getPendingOpsForResource } from "../db/pendingOperations";
+import { getResourcesWithPendingOps } from "../db/pendingOperations";
 import { getTransport, isTauri } from "../transport";
 
 // ---------------------------------------------------------------------------
@@ -456,14 +456,17 @@ async function materialiseThreads(
   for (let batchStart = 0; batchStart < threadGroups.length; batchStart += THREAD_BATCH_SIZE) {
     const batch = threadGroups.slice(batchStart, batchStart + THREAD_BATCH_SIZE);
 
-    // Pre-check pending ops OUTSIDE the transaction to avoid nested DB issues
-    const skippedThreadIds = new Set<string>();
-    for (const group of batch) {
-      const pendingOps = await getPendingOpsForResource(accountId, group.threadId);
-      if (pendingOps.length > 0) {
-        console.log(`[imapSync] Skipping thread ${group.threadId}: has ${pendingOps.length} pending local ops`);
-        skippedThreadIds.add(group.threadId);
-      }
+    // Pre-check pending ops OUTSIDE the transaction to avoid nested DB issues.
+    // One question for the whole batch: asking per thread cost a query each,
+    // thousands of them in a sync.
+    const skippedThreadIds = await getResourcesWithPendingOps(
+      accountId,
+      batch.map((g) => g.threadId),
+    );
+    if (skippedThreadIds.size > 0) {
+      console.log(
+        `[imapSync] Leaving ${skippedThreadIds.size} thread(s) alone: they have pending local ops`,
+      );
     }
 
     await withTransaction(async () => {
