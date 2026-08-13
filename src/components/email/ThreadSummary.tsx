@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sparkles, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { isAiAvailable } from "@/services/ai/providerManager";
+import { getSetting } from "@/services/db/settings";
 import { summarizeThread } from "@/services/ai/aiService";
 import { deleteAiCache } from "@/services/db/aiCache";
 import type { DbMessage } from "@/services/db/messages";
@@ -22,7 +23,16 @@ export function ThreadSummary({ threadId, accountId, messages }: ThreadSummaryPr
     if (checkedRef.current) return;
     checkedRef.current = true;
     if (messages.length < 2) return;
-    isAiAvailable().then(setAvailable);
+
+    // Both conditions matter. isAiAvailable only reports that AI is configured
+    // at all; the auto-summarise setting is what the user actually toggled.
+    // Checking only the first meant every thread opened with two or more
+    // messages was summarised — and billed — with the feature switched off.
+    Promise.all([isAiAvailable(), getSetting("ai_auto_summarize")]).then(
+      ([aiReady, autoSummarize]) => {
+        setAvailable(aiReady && autoSummarize !== "false");
+      },
+    );
   }, [messages.length]);
 
   const loadingRef = useRef(false);
