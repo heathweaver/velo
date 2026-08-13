@@ -15,6 +15,13 @@ export interface EmailFolder {
 
 export interface SyncResult {
   messages: ParsedMessage[];
+  /**
+   * How many messages this sync wrote.
+   *
+   * Syncs that stream to disk return no message bodies at all, so the length of
+   * `messages` says nothing about whether anything arrived.
+   */
+  storedCount?: number;
   folderStatus?: {
     uidvalidity: number;
     lastUid: number;

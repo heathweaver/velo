@@ -70,7 +70,7 @@ vi.mock("../db/pendingOperations", () => ({
   getPendingOpsForResource: vi.fn(() => []),
 }));
 
-import { imapMessageToParsedMessage, imapInitialSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
+import { imapMessageToParsedMessage, imapInitialSync, imapDeltaSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
 import {
   createMockImapMessage,
   createMockImapAccount,
@@ -78,13 +78,14 @@ import {
   createMockImapFolderStatus,
   createMockImapFetchResult,
 } from "@/test/mocks";
-import { imapListFolders, imapSearchFolder, imapFetchMessages } from "./tauriCommands";
+import { imapListFolders, imapSearchFolder, imapFetchMessages, imapDeltaCheck } from "./tauriCommands";
 import { getAccount } from "../db/accounts";
 import { withTransaction } from "../db/connection";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, deleteThread } from "../db/threads";
 import { upsertAttachment } from "../db/attachments";
 import { getPendingOpsForResource } from "../db/pendingOperations";
+import { getAllFolderSyncStates } from "../db/folderSyncState";
 
 describe("imapMessageToParsedMessage", () => {
   it("converts basic IMAP message to ParsedMessage format", () => {
@@ -792,4 +793,91 @@ describe("imapInitialSync — placeholder cleanup", () => {
     expect(mockDeleteThread).toHaveBeenCalled();
   });
 
+});
+describe("imapDeltaSync", () => {
+  const mockGetAccount = vi.mocked(getAccount);
+  const mockImapListFolders = vi.mocked(imapListFolders);
+  const mockImapFetchMessages = vi.mocked(imapFetchMessages);
+  const mockImapDeltaCheck = vi.mocked(imapDeltaCheck);
+  const mockGetAllFolderSyncStates = vi.mocked(getAllFolderSyncStates);
+  const mockUpsertMessage = vi.mocked(upsertMessage);
+  const mockUpdateMessageThreadIds = vi.mocked(updateMessageThreadIds);
+
+  /** One already-synced folder holding `messages` worth of new mail. */
+  function setupDelta(messages: ReturnType<typeof createMockImapMessage>[]) {
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: messages.length }),
+    ]);
+    mockGetAllFolderSyncStates.mockResolvedValue([
+      {
+        account_id: "acc-1",
+        folder_path: "INBOX",
+        uidvalidity: 1,
+        last_uid: 0,
+        modseq: null,
+        last_sync_at: 0,
+        window_days: 365,
+      },
+    ] as never);
+    mockImapDeltaCheck.mockResolvedValue([
+      {
+        folder: "INBOX",
+        uidvalidity: 1,
+        new_uids: messages.map((m) => m.uid),
+        uidvalidity_changed: false,
+      },
+    ] as never);
+    mockImapFetchMessages.mockResolvedValue(createMockImapFetchResult(messages));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
+  });
+
+  afterEach(() => {
+    mockImapFetchMessages.mockReset();
+    mockImapListFolders.mockReset();
+    mockImapDeltaCheck.mockReset();
+    mockGetAllFolderSyncStates.mockReset();
+  });
+
+  it("writes each message as it arrives rather than at the end", async () => {
+    // The failure this exists for: delta sync used to hold every parsed message
+    // and every raw IMAP message until the last folder finished — two copies of
+    // every body in memory for the length of the run.
+    const msg = createMockImapMessage({ uid: 1, message_id: "<d1@test>", date: Math.floor(Date.now() / 1000) });
+    setupDelta([msg]);
+
+    await imapDeltaSync("acc-1");
+
+    expect(mockUpsertMessage).toHaveBeenCalledTimes(1);
+    // Stored under a placeholder thread, then re-parented by the threading pass.
+    expect(mockUpsertMessage.mock.calls[0]![0]!.threadId).toBe(
+      mockUpsertMessage.mock.calls[0]![0]!.id,
+    );
+    expect(mockUpdateMessageThreadIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns no bodies, and a count of what it stored", async () => {
+    const msg = createMockImapMessage({ uid: 1, message_id: "<d1@test>", date: Math.floor(Date.now() / 1000) });
+    setupDelta([msg]);
+
+    const result = await imapDeltaSync("acc-1");
+
+    // The count is what tells the caller anything arrived: an empty `messages`
+    // array no longer means an empty sync.
+    expect(result.messages).toEqual([]);
+    expect(result.storedCount).toBe(1);
+  });
+
+  it("reports nothing stored when there is nothing new", async () => {
+    setupDelta([]);
+
+    const result = await imapDeltaSync("acc-1");
+
+    expect(result.storedCount).toBe(0);
+    expect(mockUpsertMessage).not.toHaveBeenCalled();
+  });
 });
