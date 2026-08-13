@@ -227,6 +227,20 @@ mod tests {
             PRIMARY KEY (account_id, id),
             FOREIGN KEY (account_id, thread_id) REFERENCES threads(account_id, id) ON DELETE CASCADE
         );
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            subject, from_name, from_address, body_text, snippet,
+            content='messages', content_rowid='rowid'
+        );
+        CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, snippet)
+            VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.body_text, new.snippet);
+        END;
+        CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, body_text, snippet)
+            VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_address, old.body_text, old.snippet);
+            INSERT INTO messages_fts(rowid, subject, from_name, from_address, body_text, snippet)
+            VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.body_text, new.snippet);
+        END;
         CREATE TABLE attachments (
             id TEXT PRIMARY KEY, message_id TEXT NOT NULL, account_id TEXT NOT NULL,
             filename TEXT, mime_type TEXT, size INTEGER, gmail_attachment_id TEXT,
@@ -384,6 +398,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_stored_message_is_searchable() {
+        // The database carries FTS triggers that index messages as they land.
+        // Writing from here rather than from the frontend must not bypass them,
+        // or search would quietly stop finding new mail.
+        let pool = pool().await;
+        store_chunk(&pool, &[message("m1")]).await.unwrap();
+
+        let hits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'Subject'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hits, 1);
     }
 
     #[tokio::test]
