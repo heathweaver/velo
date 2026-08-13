@@ -958,4 +958,15 @@ describe("chunk storage transport", () => {
     expect(mockTransportInvoke).not.toHaveBeenCalled();
     expect(vi.mocked(upsertMessage)).toHaveBeenCalledTimes(1);
   });
+
+  it("falls back to row-by-row writes when the Rust call fails", async () => {
+    // A sync that stores nothing is worse than a slow one, and this path is the
+    // newer of the two.
+    mockIsTauri.mockReturnValue(true);
+    mockTransportInvoke.mockRejectedValueOnce(new Error("no such command") as never);
+
+    await imapInitialSync("acc-1");
+
+    expect(vi.mocked(upsertMessage)).toHaveBeenCalledTimes(1);
+  });
 });

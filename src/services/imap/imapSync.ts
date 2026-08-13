@@ -240,6 +240,12 @@ interface MessageMeta {
 
 
 /**
+ * Set when the Rust storage command has failed once, so the rest of the session
+ * takes the row-by-row path without retrying it per chunk.
+ */
+let rustStoreUnavailable = false;
+
+/**
  * Shape a parsed message for the Rust storage command.
  *
  * Field names are what serde expects on the other side; the placeholder thread
@@ -308,11 +314,23 @@ async function storeChunk(
     // which does wrap it in a real transaction; the web path still writes row by
     // row through the SQL gateway.
     await withTransaction(async () => {
-      if (isTauri()) {
-        await getTransport().invoke("db_store_chunk", {
-          messages: chunkParsed.map(({ parsed, msg }) => toStoredMessage(accountId, parsed, msg)),
-        });
-        return;
+      if (isTauri() && !rustStoreUnavailable) {
+        try {
+          await getTransport().invoke("db_store_chunk", {
+            messages: chunkParsed.map(({ parsed, msg }) => toStoredMessage(accountId, parsed, msg)),
+          });
+          return;
+        } catch (err) {
+          // Falling back rather than failing the sync: this path is newer than
+          // the one below it, and a sync that stores nothing is a worse outcome
+          // than a slow one. Latched for the session so the failure is reported
+          // once instead of per chunk.
+          rustStoreUnavailable = true;
+          console.error(
+            "[imapSync] Rust chunk storage failed — falling back to row-by-row writes for this session:",
+            err,
+          );
+        }
       }
 
       for (const { parsed, msg } of chunkParsed) {
