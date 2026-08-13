@@ -13,6 +13,16 @@ export function buildSearchQuery(
   parsed: ParsedSearchQuery,
   accountId?: string,
   limit = 50,
+  offset = 0,
+  /**
+   * Count matches instead of listing them.
+   *
+   * The caller used to reach for the generated SQL and rewrite it with regular
+   * expressions — replacing the SELECT, stripping the ORDER BY and LIMIT, and
+   * dropping the last parameter. That only held while the statement kept its
+   * exact shape, and it silently produced nonsense the moment the shape moved.
+   */
+  countOnly = false,
 ): BuiltQuery {
   const params: unknown[] = [];
   let paramIdx = 1;
@@ -106,11 +116,33 @@ export function buildSearchQuery(
   }
 
   const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
-  const orderBy = needsFts ? "ORDER BY rank" : "ORDER BY m.date DESC";
+
+  if (countOnly) {
+    return {
+      sql: `SELECT COUNT(DISTINCT m.id) as count
+  ${fromClause}
+  ${whereStr}`,
+      params,
+    };
+  }
 
   params.push(limit);
+  const limitIdx = paramIdx;
+  paramIdx++;
+  params.push(offset);
+  const offsetIdx = paramIdx;
 
-  const sql = `SELECT DISTINCT
+  // Free-text results are ranked per message, so they stay one row per message
+  // and are deduplicated by the caller. Everything else is a list of threads:
+  // grouping here makes the limit count threads rather than messages, which it
+  // did not before — a page of 50 messages collapsed into however many threads
+  // those messages happened to belong to, and the rest were simply missing.
+  //
+  // With exactly one max() aggregate, SQLite takes the bare columns from the row
+  // that produced the maximum, so each row describes the thread's newest
+  // message — which is what the list shows.
+  const sql = needsFts
+    ? `SELECT DISTINCT
     m.id as message_id,
     m.account_id,
     m.thread_id,
@@ -119,11 +151,26 @@ export function buildSearchQuery(
     m.from_address,
     m.snippet,
     m.date,
-    ${needsFts ? "rank" : "0 as rank"}
+    rank
   ${fromClause}
   ${whereStr}
-  ${orderBy}
-  LIMIT $${paramIdx}`;
+  ORDER BY rank
+  LIMIT $${limitIdx} OFFSET $${offsetIdx}`
+    : `SELECT
+    m.id as message_id,
+    m.account_id,
+    m.thread_id,
+    m.subject,
+    m.from_name,
+    m.from_address,
+    m.snippet,
+    MAX(m.date) as date,
+    0 as rank
+  ${fromClause}
+  ${whereStr}
+  GROUP BY m.account_id, m.thread_id
+  ORDER BY date DESC
+  LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
 
   return { sql, params };
 }

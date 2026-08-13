@@ -49,10 +49,11 @@ export function getSmartFolderSearchQuery(
   /** Omit to search every account — used by all-accounts smart folders. */
   accountId: string | undefined,
   limit?: number,
+  offset = 0,
 ): { sql: string; params: unknown[] } {
   const resolved = resolveQueryTokens(rawQuery);
   const parsed = parseSearchQuery(resolved);
-  return buildSearchQuery(parsed, accountId, limit ?? 50);
+  return buildSearchQuery(parsed, accountId, limit ?? 50, offset);
 }
 
 /**
@@ -69,18 +70,7 @@ export function getSmartFolderUnreadCount(
 
   // Force unread filter
   const withUnread = { ...parsed, isUnread: true };
-  const { sql: baseSql, params } = buildSearchQuery(withUnread, accountId, 999999);
-
-  // Replace SELECT ... FROM with SELECT COUNT(DISTINCT ...) FROM and remove LIMIT
-  const countSql = baseSql
-    .replace(/SELECT DISTINCT[\s\S]*?(?=\bFROM\s)/i, "SELECT COUNT(DISTINCT m.id) as count ")
-    .replace(/ORDER BY[\s\S]*?(?=LIMIT|$)/i, "")
-    .replace(/LIMIT \$\d+/i, "");
-
-  // Remove the last param (which was the limit)
-  const countParams = params.slice(0, -1);
-
-  return { sql: countSql, params: countParams };
+  return buildSearchQuery(withUnread, accountId, 0, 0, true);
 }
 
 export interface SmartFolderRow {
@@ -99,11 +89,15 @@ export interface SmartFolderRow {
  * enriching each with actual thread data (isRead, isStarred, etc.) from the DB.
  */
 export async function mapSmartFolderRows(rows: SmartFolderRow[]): Promise<Thread[]> {
-  // Deduplicate by thread_id, keeping the first occurrence
+  // Deduplicate by thread, keeping the first occurrence. Thread ids are derived
+  // from message headers, so the same conversation delivered to two accounts can
+  // carry the same id in both — keyed on the id alone, one account's copy would
+  // vanish from a list that spans every mailbox.
   const seen = new Set<string>();
   const uniqueRows = rows.filter((r) => {
-    if (seen.has(r.thread_id)) return false;
-    seen.add(r.thread_id);
+    const key = `${r.account_id}\u0000${r.thread_id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 
