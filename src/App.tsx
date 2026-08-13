@@ -73,6 +73,7 @@ import { useTaskStore } from "./stores/taskStore";
 import { ContextMenuPortal } from "./components/ui/ContextMenuPortal";
 import { MoveToFolderDialog } from "./components/email/MoveToFolderDialog";
 import { SnoozeDialog } from "./components/email/SnoozeDialog";
+import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { OfflineBanner } from "./components/ui/OfflineBanner";
 import { UpdateToast } from "./components/ui/UpdateToast";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
@@ -113,6 +114,7 @@ export default function App() {
   const [showAskInbox, setShowAskInbox] = useState(false);
   const [moveToFolderState, setMoveToFolderState] = useState<{ open: boolean; threadIds: string[] }>({ open: false, threadIds: [] });
   const [snoozeState, setSnoozeState] = useState<{ open: boolean; threadIds: string[] }>({ open: false, threadIds: [] });
+  const [snoozeError, setSnoozeError] = useState<string | null>(null);
   const deepLinkCleanupRef = useRef<(() => void) | undefined>(undefined);
 
   // Sync bridge: router state → Zustand stores (temporary)
@@ -659,11 +661,29 @@ export default function App() {
                 await snoozeThread(accountIdForThread(id, activeAccountId)!, id, until);
                 useThreadStore.getState().removeThread(id);
               } catch (err) {
+                // Snooze moves the mail on the server, so it can genuinely
+                // fail — most often because the account has no folder to park
+                // it in. Saying so beats a console line and a thread that
+                // quietly stays put.
                 console.error("Snooze failed:", err);
+                setSnoozeError(err instanceof Error ? err.message : "Snooze failed.");
+                break;
               }
             }
           }}
           onClose={() => setSnoozeState({ open: false, threadIds: [] })}
+        />
+      )}
+
+      {snoozeError && (
+        <ConfirmDialog
+          isOpen
+          onClose={() => setSnoozeError(null)}
+          onConfirm={() => setSnoozeError(null)}
+          title="Could not snooze"
+          message={snoozeError}
+          confirmLabel="OK"
+          cancelLabel=""
         />
       )}
     </div>
