@@ -266,6 +266,9 @@ describe("imapInitialSync", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
   });
 
   afterEach(() => {
@@ -357,6 +360,22 @@ describe("imapInitialSync", () => {
     expect(accountId).toBe("acc-1");
     expect(messageIds).toHaveLength(1);
     expect(threadId).toBeTruthy();
+  });
+
+  it("keeps the placeholder thread of a message it was told not to re-parent", async () => {
+    // Messages cascade-delete with their thread. A thread held back for pending
+    // local ops never leaves its placeholder, so deleting that placeholder as
+    // an orphan deletes the mail itself.
+    const msg = createMockImapMessage({ uid: 1, message_id: "<m1@test>", date: Math.floor(Date.now() / 1000) });
+    setupFolderWithMessages("INBOX", [msg]);
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([
+      { id: "op-1" },
+    ] as never);
+
+    await imapInitialSync("acc-1");
+
+    expect(mockUpdateMessageThreadIds).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteThread)).not.toHaveBeenCalled();
   });
 
   it("returns empty messages array (bodies not accumulated)", async () => {
@@ -504,6 +523,9 @@ describe("imapInitialSync", () => {
     // Reset and use a simpler approach: single chunk that fails
     vi.clearAllMocks();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
 
     const msgs = Array.from({ length: 2 }, (_, i) =>
       createMockImapMessage({ uid: i + 1, message_id: `<m${i}@test>`, date: Math.floor(Date.now() / 1000) }),
@@ -687,6 +709,9 @@ describe("imapInitialSync — all-folders-fail propagation", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
   });
 
   afterEach(() => {
@@ -726,6 +751,9 @@ describe("imapInitialSync — placeholder cleanup", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getPendingOpsForResource).mockResolvedValue([] as never);
   });
 
   afterEach(() => {

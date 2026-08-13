@@ -716,6 +716,12 @@ export async function imapInitialSync(
   // ---------------------------------------------------------------------------
   onProgress?.({ phase: "storing_threads", current: 0, total: threadGroups.length });
 
+  // Messages actually moved out of their placeholder thread. Only these are
+  // safe to clean up in phase 5: messages cascade-delete with their thread, so
+  // dropping the placeholder of a message still parented to it destroys the
+  // mail.
+  const reparentedMessageIds = new Set<string>();
+
   for (let batchStart = 0; batchStart < threadGroups.length; batchStart += THREAD_BATCH_SIZE) {
     const batch = threadGroups.slice(batchStart, batchStart + THREAD_BATCH_SIZE);
 
@@ -781,6 +787,7 @@ export async function imapInitialSync(
         // Batch-update thread IDs for all messages in this thread
         const messageIds = messages.map((m) => m.id);
         await updateMessageThreadIds(accountId, messageIds, group.threadId);
+        for (const id of messageIds) reparentedMessageIds.add(id);
       }
     });
 
@@ -799,10 +806,12 @@ export async function imapInitialSync(
   // Placeholder threads that are no longer referenced by any final thread group
   // should be deleted to avoid ghost threads in the UI.
   const finalThreadIds = new Set(threadGroups.map((g) => g.threadId));
-  const allMessageIds = new Set(allMeta.keys());
   let orphanCount = 0;
-  for (const msgId of allMessageIds) {
-    // If this message's placeholder ID isn't a final thread ID, it's orphaned
+  for (const msgId of reparentedMessageIds) {
+    // If this message's placeholder ID isn't a final thread ID, it's orphaned.
+    // Messages skipped for pending local ops are absent from this set: they are
+    // still parented to their placeholder, and deleting it would take the
+    // message with it.
     if (!finalThreadIds.has(msgId)) {
       await deleteThread(accountId, msgId);
       orphanCount++;
