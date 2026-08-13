@@ -21,12 +21,29 @@ interface MessageItemProps {
   onContextMenu?: (e: React.MouseEvent) => void;
   /** Fired once this message's body is on screen. */
   onRendered?: () => void;
+  /**
+   * An expand-all or collapse-all applied to the whole thread.
+   *
+   * Carries a token rather than a bare boolean so that pressing collapse-all
+   * twice — with a message expanded again by hand in between — collapses it
+   * again. A boolean alone would not have changed, and nothing would happen.
+   */
+  bulkExpand?: { expanded: boolean; token: number };
 }
 
-export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu, onRendered }, ref) {
+export const MessageItem = memo(forwardRef<HTMLDivElement, MessageItemProps>(function MessageItem({ message, blockImages, senderAllowlisted, accountId, threadId, isSpam, focused, onContextMenu, onRendered, bulkExpand }, ref) {
   // Threads read as a conversation, so every message starts open. Clicking a
   // header still collapses it.
   const [expanded, setExpanded] = useState(true);
+
+  // Follows the thread-wide control, while leaving the header click free to
+  // expand or collapse this one message afterwards.
+  const bulkToken = bulkExpand?.token;
+  const bulkExpanded = bulkExpand?.expanded;
+  useEffect(() => {
+    if (bulkToken === undefined || bulkExpanded === undefined) return;
+    setExpanded(bulkExpanded);
+  }, [bulkToken, bulkExpanded]);
   const [attachments, setAttachments] = useState<DbAttachment[]>([]);
   const [authBannerDismissed, setAuthBannerDismissed] = useState(false);
   const attachmentsLoadedRef = useRef(false);

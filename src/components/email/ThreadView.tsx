@@ -257,6 +257,20 @@ export function ThreadView({ thread }: ThreadViewProps) {
     [messages, threadSortOrder],
   );
 
+  // Expand/collapse every message at once. The token is what makes a repeated
+  // press take effect — see MessageItem.
+  const [bulkExpand, setBulkExpand] = useState<{ expanded: boolean; token: number } | undefined>();
+  const allExpanded = bulkExpand?.expanded ?? true;
+  const toggleExpandAll = useCallback(() => {
+    setBulkExpand((prev) => ({
+      expanded: !(prev?.expanded ?? true),
+      token: (prev?.token ?? 0) + 1,
+    }));
+  }, []);
+  useEffect(() => {
+    setBulkExpand(undefined);
+  }, [thread.id]);
+
   const [focusedMsgIdx, setFocusedMsgIdx] = useState(-1);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -451,6 +465,8 @@ export function ThreadView({ thread }: ThreadViewProps) {
           messages={messages}
           noReply={noReply}
           defaultReplyMode={defaultReplyMode}
+          allExpanded={allExpanded}
+          onToggleExpandAll={toggleExpandAll}
           contactSidebarVisible={contactSidebarVisible}
           taskSidebarVisible={taskSidebarVisible}
           onReply={handleReply}
@@ -510,6 +526,7 @@ export function ThreadView({ thread }: ThreadViewProps) {
                 isSpam={thread.labelIds.includes("SPAM")}
                 onContextMenu={(e) => handleMessageContextMenu(e, msg)}
                 onRendered={i === 0 ? handleMessageRendered : undefined}
+                bulkExpand={bulkExpand}
               />
             ))}
           </ErrorBoundary>

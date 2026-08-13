@@ -129,6 +129,58 @@ describe("MessageItem", () => {
     expect(container.querySelector("[data-testid='email-renderer']")).toBeInTheDocument();
   });
 
+  it("collapses when the thread is collapsed", () => {
+    const { container, rerender } = render(
+      <MessageItem message={makeMessage()} blockImages={false} />,
+    );
+    expect(container.querySelector("[data-testid='email-renderer']")).toBeInTheDocument();
+
+    rerender(
+      <MessageItem
+        message={makeMessage()}
+        blockImages={false}
+        bulkExpand={{ expanded: false, token: 1 }}
+      />,
+    );
+    expect(container.querySelector("[data-testid='email-renderer']")).toBeNull();
+  });
+
+  it("collapses again after one message was reopened by hand", () => {
+    // Why the instruction carries a token: the second collapse-all is the same
+    // boolean as the first, so on that alone nothing would happen.
+    const { container, rerender } = render(
+      <MessageItem
+        message={makeMessage()}
+        blockImages={false}
+        bulkExpand={{ expanded: false, token: 1 }}
+      />,
+    );
+    fireEvent.click(container.querySelector("button")!);
+    expect(container.querySelector("[data-testid='email-renderer']")).toBeInTheDocument();
+
+    rerender(
+      <MessageItem
+        message={makeMessage()}
+        blockImages={false}
+        bulkExpand={{ expanded: false, token: 2 }}
+      />,
+    );
+    expect(container.querySelector("[data-testid='email-renderer']")).toBeNull();
+  });
+
+  it("still opens and closes on its own after a thread-wide collapse", () => {
+    const { container } = render(
+      <MessageItem
+        message={makeMessage()}
+        blockImages={false}
+        bulkExpand={{ expanded: false, token: 1 }}
+      />,
+    );
+
+    fireEvent.click(container.querySelector("button")!);
+    expect(container.querySelector("[data-testid='email-renderer']")).toBeInTheDocument();
+  });
+
   it("forwards ref to outer div", () => {
     const ref = createRef<HTMLDivElement>();
     render(
