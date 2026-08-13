@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sparkles, RefreshCw } from "lucide-react";
 import { isAiAvailable } from "@/services/ai/providerManager";
+import { getSetting } from "@/services/db/settings";
 import { generateSmartReplies } from "@/services/ai/aiService";
 import { deleteAiCache } from "@/services/db/aiCache";
 import { useComposerStore } from "@/stores/composerStore";
@@ -24,7 +25,16 @@ export function SmartReplySuggestions({ threadId, accountId, messages, noReply }
   useEffect(() => {
     if (checkedRef.current) return;
     checkedRef.current = true;
-    isAiAvailable().then(setAvailable);
+
+    // Quick replies had no setting of their own: they appeared, and generated,
+    // whenever AI was configured at all. They are the same kind of thing as an
+    // auto-drafted reply — the model writing on your behalf without being asked
+    // — so they follow that toggle rather than being unconditional.
+    Promise.all([isAiAvailable(), getSetting("ai_auto_draft_enabled")]).then(
+      ([aiReady, autoDraft]) => {
+        setAvailable(aiReady && autoDraft !== "false");
+      },
+    );
   }, []);
 
   const loadReplies = useCallback(async () => {
