@@ -95,7 +95,7 @@ import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, deleteThread } from "../db/threads";
 import { upsertAttachment } from "../db/attachments";
 import { getResourcesWithPendingOps } from "../db/pendingOperations";
-import { getAllFolderSyncStates } from "../db/folderSyncState";
+import { getAllFolderSyncStates, upsertFolderSyncState } from "../db/folderSyncState";
 
 describe("imapMessageToParsedMessage", () => {
   it("converts basic IMAP message to ParsedMessage format", () => {
@@ -878,6 +878,32 @@ describe("imapDeltaSync", () => {
     // array no longer means an empty sync.
     expect(result.messages).toEqual([]);
     expect(result.storedCount).toBe(1);
+  });
+
+  it("records sync state for a folder that turns out to be empty", async () => {
+    // A folder with no state looks new, so delta sync searches it from scratch.
+    // Not recording the result of that search left it looking new next time
+    // too: two empty folders were being re-searched every fifteen seconds, for
+    // ever, dragging the whole sync machinery along behind them.
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX.Spam", raw_path: "INBOX.Spam", exists: 0 }),
+    ]);
+    mockGetAllFolderSyncStates.mockResolvedValue([]);
+    vi.mocked(imapSearchFolder).mockResolvedValue({
+      uids: [],
+      folder_status: createMockImapFolderStatus({ exists: 0, uidvalidity: 42 }),
+    });
+
+    await imapDeltaSync("acc-1");
+
+    expect(vi.mocked(upsertFolderSyncState)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: "acc-1",
+        folder_path: "INBOX.Spam",
+        uidvalidity: 42,
+        last_uid: 0,
+      }),
+    );
   });
 
   it("reports nothing stored when there is nothing new", async () => {

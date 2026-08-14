@@ -696,7 +696,20 @@ export async function imapInitialSync(
       // Reset circuit breaker on success
       consecutiveFailures = 0;
 
-      if (uidsToFetch.length === 0) continue;
+      if (uidsToFetch.length === 0) {
+        // Same reason as delta sync: a folder with nothing in it has still been
+        // synced, and must not look new next time.
+        await upsertFolderSyncState({
+          account_id: accountId,
+          folder_path: folder.raw_path,
+          uidvalidity: searchResult.folder_status.uidvalidity,
+          last_uid: 0,
+          modseq: null,
+          last_sync_at: Math.floor(Date.now() / 1000),
+          window_days: daysBack,
+        });
+        continue;
+      }
 
       // Date filter config
       // Negative infinity when syncing everything, so nothing is filtered out.
@@ -925,7 +938,21 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
       const searchResult = await imapSearchFolder(config, folder.raw_path, sinceDate, "background");
       consecutiveFailures = 0;
 
-      if (searchResult.uids.length === 0) continue;
+      if (searchResult.uids.length === 0) {
+        // An empty folder has still been checked. Leaving it unrecorded meant
+        // it looked new on the next pass too, so every sync searched it from
+        // scratch — for ever, and the whole sync machinery ran behind it.
+        await upsertFolderSyncState({
+          account_id: accountId,
+          folder_path: folder.raw_path,
+          uidvalidity: searchResult.folder_status.uidvalidity,
+          last_uid: 0,
+          modseq: null,
+          last_sync_at: Math.floor(Date.now() / 1000),
+          window_days: daysBack,
+        });
+        continue;
+      }
 
       const { lastUid, stored } = await fetchAndStoreUids(
         accountId,
@@ -1026,7 +1053,20 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
           );
           const sinceDate = computeSinceDate(daysBack);
           const searchResult = await imapSearchFolder(config, folder.raw_path, sinceDate, "background");
-          if (searchResult.uids.length === 0) continue;
+          if (searchResult.uids.length === 0) {
+            // Record the new uidvalidity even with nothing to fetch, or the
+            // next pass detects the same change again.
+            await upsertFolderSyncState({
+              account_id: accountId,
+              folder_path: folder.raw_path,
+              uidvalidity: searchResult.folder_status.uidvalidity,
+              last_uid: 0,
+              modseq: null,
+              last_sync_at: Math.floor(Date.now() / 1000),
+              window_days: daysBack,
+            });
+            continue;
+          }
 
           const { lastUid, stored } = await fetchAndStoreUids(
             accountId,
