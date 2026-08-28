@@ -5,7 +5,6 @@ use crate::imap::types::{
 };
 use crate::smtp::client as smtp_client;
 use crate::smtp::types::{SmtpConfig, SmtpSendResult};
-use serde::Deserialize;
 
 // ---------- IMAP commands ----------
 
@@ -27,8 +26,9 @@ pub async fn imap_fetch_messages(
     config: ImapConfig,
     folder: String,
     uids: Vec<u32>,
-    #[serde(default)] headers_only: bool,
+    headers_only: Option<bool>,
 ) -> Result<ImapFetchResult, String> {
+    let headers_only = headers_only.unwrap_or(false);
     if uids.is_empty() {
         return Err("No UIDs provided".to_string());
     }
