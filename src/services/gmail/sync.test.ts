@@ -3,6 +3,9 @@ import { deltaSync } from "./sync";
 import { GmailClient } from "./client";
 
 // Mock all DB modules
+vi.mock("../db/connection", () => ({
+  withTransaction: vi.fn(async (fn: (db: unknown) => Promise<void>) => fn({})),
+}));
 vi.mock("../db/threads", () => ({
   upsertThread: vi.fn(),
   setThreadLabels: vi.fn(),

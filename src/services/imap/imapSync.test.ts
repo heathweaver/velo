@@ -457,6 +457,7 @@ describe("imapInitialSync", () => {
       expect.objectContaining({ host: "imap.example.com" }),
       "INBOX",
       [1], // UIDs from search
+      true, // headers-only during sync
     );
   });
 
@@ -616,12 +617,12 @@ describe("computeSinceDate", () => {
     expect(result).toMatch(/^\d{1,2}-[A-Z][a-z]{2}-\d{4}$/);
   });
 
-  it("adds 1-day safety margin", () => {
-    // For daysBack=0, should still go back 1 day
-    const result = computeSinceDate(0);
-    const yesterday = new Date();
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    expect(result).toBe(formatImapDate(yesterday));
+  it("returns null when daysBack is 0 (sync all mail)", () => {
+    expect(computeSinceDate(0)).toBeNull();
+  });
+
+  it("returns null when daysBack is negative", () => {
+    expect(computeSinceDate(-30)).toBeNull();
   });
 });
 

@@ -94,10 +94,10 @@ export function formatImapDate(date: Date): string {
 
 /**
  * Compute a `DD-Mon-YYYY` SINCE date string for the given `daysBack` value.
- * Subtracts an extra day as a safety margin for timezone differences
- * (IMAP SINCE has date-only granularity, no time component).
+ * Returns null when `daysBack <= 0` (sync everything — no SINCE filter).
  */
-export function computeSinceDate(daysBack: number): string {
+export function computeSinceDate(daysBack: number): string | null {
+  if (daysBack <= 0) return null;
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - daysBack - 1);
   return formatImapDate(date);
@@ -356,6 +356,7 @@ async function fetchMessagesInBatches(
   config: ImapConfig,
   folder: string,
   uids: number[],
+  headersOnly = true,
   onBatch?: (fetched: number, total: number) => void,
 ): Promise<{ messages: ImapMessage[]; lastUid: number; uidvalidity: number }> {
   const allMessages: ImapMessage[] = [];
@@ -364,7 +365,7 @@ async function fetchMessagesInBatches(
 
   for (let i = 0; i < uids.length; i += BATCH_SIZE) {
     const batch = uids.slice(i, i + BATCH_SIZE);
-    const result = await imapFetchMessages(config, folder, batch);
+    const result = await imapFetchMessages(config, folder, batch, headersOnly);
 
     allMessages.push(...result.messages);
     uidvalidity = result.folder_status.uidvalidity;
@@ -446,6 +447,7 @@ export async function imapInitialSync(
   let storedCount = 0;
   let consecutiveFailures = 0;
   const folderErrors: string[] = [];
+  let syncIncomplete = false;
 
   for (let folderIdx = 0; folderIdx < syncableFolders.length; folderIdx++) {
     const folder = syncableFolders[folderIdx]!;
@@ -457,6 +459,7 @@ export async function imapInitialSync(
         `[imapSync] Circuit breaker: ${consecutiveFailures} consecutive connection failures, ` +
         `skipping remaining ${syncableFolders.length - folderIdx} folders`,
       );
+      syncIncomplete = true;
       break;
     }
 
@@ -487,8 +490,11 @@ export async function imapInitialSync(
 
       if (uidsToFetch.length === 0) continue;
 
-      // Date filter config
-      const cutoffDate = Math.floor(Date.now() / 1000) - daysBack * 86400;
+      // Date filter config — unlimited when syncing everything
+      const cutoffDate =
+        daysBack <= 0
+          ? Number.NEGATIVE_INFINITY
+          : Math.floor(Date.now() / 1000) - daysBack * 86400;
       const nowSeconds = Math.floor(Date.now() / 1000);
       let dateFallbackCount = 0;
       let folderFetchedCount = 0;
@@ -501,14 +507,14 @@ export async function imapInitialSync(
         const chunkUids = uidsToFetch.slice(chunkStart, chunkStart + CHUNK_SIZE);
         let chunkResult;
         try {
-          chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids);
+          chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, true);
         } catch (chunkErr) {
           // Retry once for transient connection errors
           if (isConnectionError(chunkErr)) {
             console.warn(`[imapSync] Chunk fetch failed in ${folder.path}, retrying in 2s:`, chunkErr);
             await delay(2_000);
             try {
-              chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids);
+              chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, true);
             } catch (retryErr) {
               console.error(`[imapSync] Chunk retry failed in ${folder.path}:`, retryErr);
               continue;
@@ -589,7 +595,7 @@ export async function imapInitialSync(
                 imapFolder: msg.folder ?? null,
               });
 
-              // Store attachments
+              // Headers-only sync — attachments load with the body on open
               for (const att of parsed.attachments) {
                 await upsertAttachment({
                   id: `${parsed.id}_${att.gmailAttachmentId}`,
@@ -798,8 +804,12 @@ export async function imapInitialSync(
     `[imapSync] Stored ${storedCount} messages in ${threadGroups.length} threads (found ${totalMessagesFound} on server)`,
   );
 
-  // Only mark sync as complete if messages were stored OR no messages exist on server.
-  if (storedCount > 0 || totalMessagesFound === 0) {
+  // Only mark sync as complete when all folders were processed.
+  if (syncIncomplete) {
+    console.warn(
+      `[imapSync] Sync incomplete — circuit breaker skipped folders, NOT marking sync as complete`,
+    );
+  } else if (storedCount > 0 || totalMessagesFound === 0) {
     await updateAccountSyncState(accountId, `imap-synced-${Date.now()}`);
   } else {
     console.warn(

@@ -99,6 +99,7 @@ describe('IMAP Tauri commands', () => {
       config: testImapConfig,
       folder: 'INBOX',
       uids: [1, 2, 3],
+      headersOnly: false,
     });
     expect(result).toEqual(fetchResult);
   });

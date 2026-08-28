@@ -2,6 +2,7 @@ import { getGmailClient } from "./tokenManager";
 import { initialSync, deltaSync, type SyncProgress } from "./sync";
 import { getAccount, clearAccountHistoryId } from "../db/accounts";
 import { getSetting } from "../db/settings";
+import { parseSyncPeriodDays } from "../sync/syncWindow";
 import { getThreadCountForAccount, deleteAllThreadsForAccount } from "../db/threads";
 import { deleteAllMessagesForAccount } from "../db/messages";
 import { imapInitialSync, imapDeltaSync } from "../imap/imapSync";
@@ -53,8 +54,7 @@ async function syncGmailAccount(accountId: string): Promise<void> {
     throw new Error("Account not found");
   }
 
-  const syncPeriodStr = await getSetting("sync_period_days");
-  const syncDays = parseInt(syncPeriodStr ?? "365", 10) || 365;
+  const syncDays = parseSyncPeriodDays(await getSetting("sync_period_days"));
 
   if (account.history_id) {
     // Delta sync
@@ -94,8 +94,7 @@ async function syncImapAccount(accountId: string): Promise<void> {
     await ensureFreshToken(account);
   }
 
-  const syncPeriodStr = await getSetting("sync_period_days");
-  const syncDays = parseInt(syncPeriodStr ?? "365", 10) || 365;
+  const syncDays = parseSyncPeriodDays(await getSetting("sync_period_days"));
 
   if (account.history_id) {
     // Delta sync — IMAP uses folder-level UID tracking

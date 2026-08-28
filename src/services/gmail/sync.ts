@@ -2,7 +2,9 @@ import { GmailClient } from "./client";
 import { parseGmailMessage, type ParsedMessage } from "./messageParser";
 import { upsertLabel } from "../db/labels";
 import { upsertThread, setThreadLabels } from "../db/threads";
+import { withTransaction } from "../db/connection";
 import { upsertMessage } from "../db/messages";
+import { buildDateQuery } from "../sync/syncWindow";
 import { upsertAttachment } from "../db/attachments";
 import { updateAccountSyncState } from "../db/accounts";
 import { shouldNotifyForMessage, queueNewEmailNotification } from "../notifications/notificationManager";
@@ -26,6 +28,27 @@ export interface SyncProgress {
 }
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
+
+/** Gmail thread fetch format during sync — metadata only; bodies load on open. */
+const SYNC_THREAD_FORMAT = "metadata" as const;
+
+async function storeThread(
+  thread: { id: string },
+  accountId: string,
+  parsedMessages: ParsedMessage[],
+  client?: GmailClient,
+  autoArchiveCategories?: Set<string>,
+): Promise<void> {
+  await withTransaction(async () => {
+    await processAndStoreThread(
+      thread,
+      accountId,
+      parsedMessages,
+      client,
+      autoArchiveCategories,
+    );
+  });
+}
 
 /**
  * Store a fetched thread's data (messages, labels, attachments) into the local DB.
@@ -186,9 +209,7 @@ export async function initialSync(
   onProgress?.({ phase: "labels", current: 1, total: 1 });
 
   // Phase 2: Fetch thread list
-  const afterDate = new Date();
-  afterDate.setDate(afterDate.getDate() - daysBack);
-  const afterStr = `${afterDate.getFullYear()}/${afterDate.getMonth() + 1}/${afterDate.getDate()}`;
+  const query = buildDateQuery(daysBack);
 
   const threadStubs: { id: string }[] = [];
   let pageToken: string | undefined;
@@ -199,7 +220,7 @@ export async function initialSync(
     const response = await client.listThreads({
       maxResults: 100,
       pageToken,
-      q: `after:${afterStr}`,
+      ...(query ? { q: query } : {}),
     });
 
     if (response.threads) {
@@ -230,7 +251,7 @@ export async function initialSync(
       });
 
       try {
-        const thread = await client.getThread(stub.id, "full");
+        const thread = await client.getThread(stub.id, SYNC_THREAD_FORMAT);
 
         if (BigInt(thread.historyId) > BigInt(historyId)) {
           historyId = thread.historyId;
@@ -239,7 +260,7 @@ export async function initialSync(
         if (!thread.messages || thread.messages.length === 0) return;
 
         const parsedMessages = thread.messages.map(parseGmailMessage);
-        await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+        await storeThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
       } catch (err) {
         console.error(`Failed to sync thread ${stub.id}:`, err);
       }
@@ -360,12 +381,12 @@ export async function deltaSync(
             return;
           }
 
-          const thread = await client.getThread(threadId, "full");
+          const thread = await client.getThread(threadId, SYNC_THREAD_FORMAT);
 
           if (!thread.messages || thread.messages.length === 0) return;
 
           const parsedMessages = thread.messages.map(parseGmailMessage);
-          await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          await storeThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
 
           // Auto-archive muted threads that reappear in INBOX
           if (mutedThreadIds.has(threadId)) {

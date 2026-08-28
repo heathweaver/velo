@@ -227,11 +227,13 @@ pub async fn list_folders(session: &mut ImapSession) -> Result<Vec<ImapFolder>, 
     Ok(folders)
 }
 
-/// Fetch messages from a folder by UID range (e.g. "1:100" or "500:*").
+/// Fetch messages from a folder by UID range (e.g. "1,5,10" or "500:*").
+/// When `headers_only` is true, fetches `BODY.PEEK[HEADER]` instead of full bodies.
 pub async fn fetch_messages(
     session: &mut ImapSession,
     folder: &str,
     uid_range: &str,
+    headers_only: bool,
 ) -> Result<ImapFetchResult, String> {
     let mailbox = tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(folder))
         .await
@@ -255,9 +257,14 @@ pub async fn fetch_messages(
 
     // Try UID FETCH first; if the stream is empty, fall back to sequence-number FETCH.
     // Some IMAP servers return empty streams for UID FETCH despite valid UIDs.
+    let fetch_items = if headers_only {
+        "UID FLAGS INTERNALDATE BODY.PEEK[HEADER]"
+    } else {
+        "UID FLAGS INTERNALDATE BODY.PEEK[]"
+    };
     let fetches = tokio::time::timeout(IMAP_FETCH_TIMEOUT, async {
         let stream = session
-            .uid_fetch(uid_range, "UID FLAGS INTERNALDATE BODY.PEEK[]")
+            .uid_fetch(uid_range, fetch_items)
             .await
             .map_err(|e| format!("UID FETCH {folder} uids={uid_range} failed: {e}"))?;
         Ok::<_, String>(stream.collect::<Vec<_>>().await)
@@ -940,6 +947,7 @@ pub async fn raw_fetch_messages(
     config: &ImapConfig,
     folder: &str,
     uid_range: &str,
+    headers_only: bool,
 ) -> Result<ImapFetchResult, String> {
     log::info!("RAW IMAP FETCH: connecting to {}:{} for folder {folder}, UIDs {uid_range}", config.host, config.port);
 
@@ -1001,8 +1009,13 @@ pub async fn raw_fetch_messages(
         highest_modseq: None,
     };
 
-    // UID FETCH with full body
-    let fetch_cmd = format!("a3 UID FETCH {uid_range} (UID FLAGS INTERNALDATE BODY.PEEK[])\r\n");
+    // UID FETCH — headers only during sync, full body on demand
+    let fetch_body = if headers_only {
+        "BODY.PEEK[HEADER]"
+    } else {
+        "BODY.PEEK[]"
+    };
+    let fetch_cmd = format!("a3 UID FETCH {uid_range} (UID FLAGS INTERNALDATE {fetch_body})\r\n");
     reader.get_mut().write_all(fetch_cmd.as_bytes()).await
         .map_err(|e| format!("FETCH write: {e}"))?;
 
@@ -1627,7 +1640,7 @@ fn parse_message(
     let body_text = message.body_text(0).map(|s| s.to_string());
     let body_html = message.body_html(0).map(|s| s.to_string());
 
-    // Generate snippet from text body (truncate at char boundary)
+    // Generate snippet from text body, or subject when headers-only
     let snippet = body_text.as_ref().map(|text| {
         let cleaned: String = text
             .chars()
@@ -1640,6 +1653,16 @@ fn parse_message(
         } else {
             trimmed.to_string()
         }
+    }).or_else(|| {
+        subject.as_ref().map(|s| {
+            let trimmed = s.trim();
+            if trimmed.chars().count() > 200 {
+                let end: String = trimmed.chars().take(200).collect();
+                format!("{end}...")
+            } else {
+                trimmed.to_string()
+            }
+        })
     });
 
     // List-Unsubscribe headers

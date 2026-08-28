@@ -142,9 +142,10 @@ export async function imapListFolders(config: ImapConfig): Promise<ImapFolder[]>
 export async function imapFetchMessages(
   config: ImapConfig,
   folder: string,
-  uids: number[]
+  uids: number[],
+  headersOnly = false,
 ): Promise<ImapFetchResult> {
-  return invoke<ImapFetchResult>('imap_fetch_messages', { config, folder, uids });
+  return invoke<ImapFetchResult>('imap_fetch_messages', { config, folder, uids, headersOnly });
 }
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { MessageItem } from "./MessageItem";
 import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
+import { ensureMessageBodies } from "@/services/email/messageBodies";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useThreadStore, type Thread } from "@/stores/threadStore";
@@ -81,6 +82,7 @@ export function ThreadView({ thread }: ThreadViewProps) {
     if (!activeAccountId) return;
     setLoading(true);
     getMessagesForThread(activeAccountId, thread.id)
+      .then((msgs) => ensureMessageBodies(activeAccountId, msgs))
       .then(setMessages)
       .catch(console.error)
       .finally(() => setLoading(false));
