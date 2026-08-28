@@ -17,6 +17,7 @@ import {
   regenerateAutoDraft,
   type AutoDraftMode,
 } from "@/services/ai/writingStyleService";
+import { buildForwardQuote, buildQuote } from "@/utils/replyQuote";
 import type { DbMessage } from "@/services/db/messages";
 import type { Thread } from "@/stores/threadStore";
 
@@ -224,7 +225,14 @@ export function InlineReply({ thread, messages, accountId, noReply, onSent }: In
   const handleExpandToComposer = useCallback(() => {
     if (!editor || !lastMessage) return;
     const { to, cc } = getRecipients();
-    const bodyHtml = editor.getHTML();
+    const typedHtml = editor.getHTML();
+    const quoted =
+      mode === "forward"
+        ? buildForwardQuote(lastMessage)
+        : mode === "reply" || mode === "replyAll"
+          ? buildQuote(lastMessage)
+          : "";
+    const bodyHtml = editor.isEmpty ? quoted : `${typedHtml}${quoted}`;
 
     openComposer({
       mode: mode === "forward" ? "forward" : mode === "replyAll" ? "replyAll" : "reply",
