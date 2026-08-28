@@ -144,6 +144,16 @@ export function Composer() {
     },
   });
 
+  // TipTap only reads bodyHtml when the editor is first created. Each time the
+  // composer opens (reply/forward/new), push the store content into the editor.
+  useEffect(() => {
+    if (!isOpen || !editor) return;
+    const { bodyHtml } = useComposerStore.getState();
+    if (bodyHtml !== editor.getHTML()) {
+      editor.commands.setContent(bodyHtml, { emitUpdate: false });
+    }
+  }, [isOpen, editor]);
+
   // Load signature, aliases, and templates in parallel when composer opens
   useEffect(() => {
     if (!isOpen || !activeAccountId) return;
