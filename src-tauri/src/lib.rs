@@ -99,6 +99,7 @@ pub fn run() {
             commands::imap_fetch_message_body,
             commands::imap_fetch_raw_message,
             commands::imap_set_flags,
+            commands::imap_create_folder,
             commands::imap_move_messages,
             commands::imap_delete_messages,
             commands::imap_get_folder_status,
@@ -111,6 +112,7 @@ pub fn run() {
             commands::imap_delta_check,
             commands::smtp_send_email,
             commands::smtp_test_connection,
+            commands::db_store_chunk,
         ])
         .setup(|app| {
             {

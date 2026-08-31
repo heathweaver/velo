@@ -223,6 +223,17 @@ export async function imapSetFlags(
  * Move messages from one folder to another.
  * Uses MOVE extension if available, falls back to COPY+DELETE.
  */
+/**
+ * Create a mailbox on the server. Succeeds if it already exists.
+ */
+export async function imapCreateFolder(
+  config: ImapConfig,
+  folder: string,
+  priority?: ImapPriority
+): Promise<void> {
+  return invoke<void>('imap_create_folder', { config, folder, priority });
+}
+
 export async function imapMoveMessages(
   config: ImapConfig,
   folder: string,

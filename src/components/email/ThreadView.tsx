@@ -1,10 +1,11 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
-import { useThreadStore, type Thread } from "@/stores/threadStore";
+import { useMarkReadWhenRead } from "@/hooks/useMarkReadWhenRead";
+import type { Thread } from "@/stores/threadStore";
 import { useComposerStore } from "@/stores/composerStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { markThreadRead } from "@/services/emailActions";
@@ -13,6 +14,7 @@ import { getSetting } from "@/services/db/settings";
 import { getAllowlistedSenders } from "@/services/db/imageAllowlist";
 import { VolumeX } from "lucide-react";
 import { escapeHtml, sanitizeHtml } from "@/utils/sanitize";
+import { buildForwardQuote, buildQuote } from "@/utils/replyQuote";
 import { isNoReplyAddress } from "@/utils/noReply";
 import { ThreadSummary } from "./ThreadSummary";
 import { SmartReplySuggestions } from "./SmartReplySuggestions";
@@ -75,7 +77,6 @@ export function ThreadView({ thread }: ThreadViewProps) {
   const toggleContactSidebar = useUIStore((s) => s.toggleContactSidebar);
   const taskSidebarVisible = useUIStore((s) => s.taskSidebarVisible);
   const [showTaskExtract, setShowTaskExtract] = useState(false);
-  const updateThread = useThreadStore((s) => s.updateThread);
   const [messages, setMessages] = useState<DbMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const markedReadRef = useRef<string | null>(null);
@@ -116,27 +117,35 @@ export function ThreadView({ thread }: ThreadViewProps) {
     return () => { cancelled = true; };
   }, [threadAccountId, messages]);
 
-  // Auto-mark unread threads as read when opened (respects mark-as-read setting)
   const markAsReadBehavior = useUIStore((s) => s.markAsReadBehavior);
+
+  /**
+   * Whether this thread's body has actually appeared on screen.
+   *
+   * The wait is counted from the message being rendered, not from the thread
+   * being opened: a large message can take a moment to lay out, and a timer
+   * started before then can expire while there is still nothing to read.
+   */
+  const [bodyRendered, setBodyRendered] = useState(false);
   useEffect(() => {
-    if (!threadAccountId || thread.isRead || markedReadRef.current === thread.id) return;
-    if (markAsReadBehavior === "manual") return;
+    setBodyRendered(false);
+  }, [thread.id]);
+  const handleMessageRendered = useCallback(() => setBodyRendered(true), []);
 
-    const markRead = () => {
-      markedReadRef.current = thread.id;
-      markThreadRead(threadAccountId, thread.id, [], true).catch((err) => {
-        console.error("Failed to mark thread as read:", err);
-      });
-    };
+  const markRead = useCallback(() => {
+    if (!threadAccountId || markedReadRef.current === thread.id) return;
+    markedReadRef.current = thread.id;
+    markThreadRead(threadAccountId, thread.id, [], true).catch((err) => {
+      console.error("Failed to mark thread as read:", err);
+    });
+  }, [threadAccountId, thread.id]);
 
-    if (markAsReadBehavior === "2s") {
-      const timer = setTimeout(markRead, 2000);
-      return () => clearTimeout(timer);
-    }
-
-    // instant
-    markRead();
-  }, [threadAccountId, thread.id, thread.isRead, updateThread, markAsReadBehavior]);
+  useMarkReadWhenRead({
+    behavior: markAsReadBehavior,
+    isRead: thread.isRead,
+    bodyRendered,
+    onMark: markRead,
+  });
 
   const openComposer = useComposerStore((s) => s.openComposer);
   const openMenu = useContextMenuStore((s) => s.openMenu);
@@ -210,7 +219,12 @@ export function ThreadView({ thread }: ThreadViewProps) {
         ? `${escapeHtml(msg.from_name)} &lt;${escapeHtml(msg.from_address ?? "")}&gt;`
         : escapeHtml(msg.from_address ?? "Unknown");
       const to = escapeHtml(msg.to_addresses ?? "");
-      const body = msg.body_html ? sanitizeHtml(msg.body_html) : escapeHtml(msg.body_text ?? "");
+      const body =
+    msg.body_html
+      ? sanitizeHtml(msg.body_html)
+      : msg.body_text
+        ? escapeHtml(msg.body_text)
+        : escapeHtml(msg.snippet ?? "");
       return `
         <div style="margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #e5e5e5">
           <div style="margin-bottom:8px;color:#666;font-size:12px">
@@ -236,6 +250,33 @@ export function ThreadView({ thread }: ThreadViewProps) {
   }, [messages, thread.subject]);
 
   // Message-level keyboard navigation (ArrowUp / ArrowDown)
+  /**
+   * The messages in reading order.
+   *
+   * `messages` itself stays chronological, because print, .eml export and
+   * "reply to the last message" all mean the real order regardless of how the
+   * thread is displayed.
+   */
+  const threadSortOrder = useUIStore((s) => s.threadSortOrder);
+  const displayMessages = useMemo(
+    () => (threadSortOrder === "newest" ? [...messages].reverse() : messages),
+    [messages, threadSortOrder],
+  );
+
+  // Expand/collapse every message at once. The token is what makes a repeated
+  // press take effect — see MessageItem.
+  const [bulkExpand, setBulkExpand] = useState<{ expanded: boolean; token: number } | undefined>();
+  const allExpanded = bulkExpand?.expanded ?? true;
+  const toggleExpandAll = useCallback(() => {
+    setBulkExpand((prev) => ({
+      expanded: !(prev?.expanded ?? true),
+      token: (prev?.token ?? 0) + 1,
+    }));
+  }, []);
+  useEffect(() => {
+    setBulkExpand(undefined);
+  }, [thread.id]);
+
   const [focusedMsgIdx, setFocusedMsgIdx] = useState(-1);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -385,6 +426,38 @@ export function ThreadView({ thread }: ThreadViewProps) {
   // Detect no-reply senders — disable reply buttons but still allow forward
   const noReply = isNoReplyAddress(lastMessage?.reply_to ?? lastMessage?.from_address);
 
+  /**
+   * Reply box and suggestions, kept next to the newest message.
+   *
+   * You reply to the newest message, so the box belongs beside it. At the
+   * bottom of a newest-first thread it sat under everything already read,
+   * which meant scrolling the whole conversation to answer it.
+   */
+  const replyBlock = threadAccountId ? (
+    <>
+      {messages.length > 0 && (
+        <SmartReplySuggestions
+          threadId={thread.id}
+          accountId={threadAccountId}
+          messages={messages}
+          noReply={noReply}
+        />
+      )}
+      <InlineReply
+        thread={thread}
+        messages={messages}
+        accountId={threadAccountId}
+        noReply={noReply}
+        onSent={() => {
+          // Reload messages after sending
+          getMessagesForThread(threadAccountId, thread.id)
+            .then(setMessages)
+            .catch(console.error);
+        }}
+      />
+    </>
+  ) : null;
+
   // Get the primary sender for the contact sidebar
   const primarySender = lastMessage?.from_address ?? null;
   const primarySenderName = lastMessage?.from_name ?? null;
@@ -398,6 +471,8 @@ export function ThreadView({ thread }: ThreadViewProps) {
           messages={messages}
           noReply={noReply}
           defaultReplyMode={defaultReplyMode}
+          allExpanded={allExpanded}
+          onToggleExpandAll={toggleExpandAll}
           contactSidebarVisible={contactSidebarVisible}
           taskSidebarVisible={taskSidebarVisible}
           onReply={handleReply}
@@ -442,8 +517,10 @@ export function ThreadView({ thread }: ThreadViewProps) {
           thread; the gutter makes each message a discrete object.
         */}
         <div className="flex-1 overflow-y-auto bg-bg-tertiary p-2 space-y-2">
+          {threadSortOrder === "newest" && replyBlock}
+
           <ErrorBoundary name="MessageList">
-            {messages.map((msg, i) => (
+            {displayMessages.map((msg, i) => (
               <MessageItem
                 key={msg.id}
                 ref={(el) => { messageRefs.current[i] = el; }}
@@ -454,35 +531,13 @@ export function ThreadView({ thread }: ThreadViewProps) {
                 senderAllowlisted={msg.from_address ? allowlistedSenders.has(msg.from_address) : false}
                 isSpam={thread.labelIds.includes("SPAM")}
                 onContextMenu={(e) => handleMessageContextMenu(e, msg)}
+                onRendered={i === 0 ? handleMessageRendered : undefined}
+                bulkExpand={bulkExpand}
               />
             ))}
           </ErrorBoundary>
 
-          {/* Smart Reply Suggestions */}
-          {threadAccountId && messages.length > 0 && (
-            <SmartReplySuggestions
-              threadId={thread.id}
-              accountId={threadAccountId}
-              messages={messages}
-              noReply={noReply}
-            />
-          )}
-
-          {/* Inline Reply */}
-          {threadAccountId && (
-            <InlineReply
-              thread={thread}
-              messages={messages}
-              accountId={threadAccountId}
-              noReply={noReply}
-              onSent={() => {
-                // Reload messages after sending
-                getMessagesForThread(threadAccountId, thread.id)
-                  .then(setMessages)
-                  .catch(console.error);
-              }}
-            />
-          )}
+          {threadSortOrder === "oldest" && replyBlock}
         </div>
       </div>
 
@@ -531,19 +586,4 @@ export function ThreadView({ thread }: ThreadViewProps) {
       )}
     </div>
   );
-}
-
-function buildQuote(msg: DbMessage): string {
-  const date = new Date(msg.date).toLocaleString();
-  const from = msg.from_name
-    ? `${escapeHtml(msg.from_name)} &lt;${escapeHtml(msg.from_address ?? "")}&gt;`
-    : escapeHtml(msg.from_address ?? "Unknown");
-  const body = msg.body_html ? sanitizeHtml(msg.body_html) : escapeHtml(msg.body_text ?? "");
-  return `<br><br><div style="border-left:2px solid #ccc;padding-left:12px;margin-left:0;color:#666">On ${date}, ${from} wrote:<br>${body}</div>`;
-}
-
-function buildForwardQuote(msg: DbMessage): string {
-  const date = new Date(msg.date).toLocaleString();
-  const body = msg.body_html ? sanitizeHtml(msg.body_html) : escapeHtml(msg.body_text ?? "");
-  return `<br><br>---------- Forwarded message ---------<br>From: ${escapeHtml(msg.from_name ?? "")} &lt;${escapeHtml(msg.from_address ?? "")}&gt;<br>Date: ${date}<br>Subject: ${escapeHtml(msg.subject ?? "")}<br>To: ${escapeHtml(msg.to_addresses ?? "")}<br><br>${body}`;
 }

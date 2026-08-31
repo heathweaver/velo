@@ -1,5 +1,7 @@
 import { getDb } from "../db/connection";
 import { getAccount } from "../db/accounts";
+import { buildImapConfig } from "../imap/imapConfigBuilder";
+import { imapCreateFolder } from "../imap/tauriCommands";
 
 /**
  * Where a snoozed thread is parked on the server.
@@ -27,13 +29,20 @@ export type SnoozeDestination =
 const SNOOZE_FOLDER_NAMES = ["later", "snoozed", "snooze"];
 
 /**
- * Find where this account's snoozed mail should go, or null if there is
- * nowhere suitable.
+ * The folder created when an account has nowhere to park snoozed mail.
  *
- * Deliberately does not create a folder: creating mailboxes on someone's server
- * as a side effect of clicking snooze is a bigger decision than this code
- * should make on its own. Without a destination the caller keeps the thread in
- * place rather than pretending to hide it.
+ * Named to match what Spark uses, so an account that later opens Spark — or
+ * that already has snoozed mail from it — sees one pile rather than two.
+ */
+const DEFAULT_SNOOZE_FOLDER_NAME = "Later";
+
+/**
+ * Find where this account's snoozed mail should go, creating the folder if
+ * there is nowhere suitable yet.
+ *
+ * Returns null only when the destination could not be established at all —
+ * the caller then refuses to snooze rather than hiding the thread locally and
+ * letting the next sync bring it straight back.
  */
 export async function resolveSnoozeDestination(
   accountId: string,
@@ -70,5 +79,38 @@ export async function resolveSnoozeDestination(
       return { kind: "folder", folderPath: match.imap_folder_path, labelId: match.id };
     }
   }
-  return null;
+
+  return createSnoozeFolder(accountId, rows);
+}
+
+/**
+ * Create the snooze folder on the server.
+ *
+ * Placed under INBOX when the account's other folders live there, since a
+ * server that nests everything under INBOX will usually not show a top-level
+ * mailbox in the same list. The separator is taken from an existing folder
+ * rather than assumed: it is "." on some servers and "/" on others, and
+ * guessing wrong creates a mailbox with a literal dot in its name.
+ */
+async function createSnoozeFolder(
+  accountId: string,
+  existing: { imap_folder_path: string | null }[],
+): Promise<SnoozeDestination | null> {
+  const account = await getAccount(accountId);
+  if (!account) return null;
+
+  const nested = existing.find((r) => r.imap_folder_path?.startsWith("INBOX"));
+  const separator = nested?.imap_folder_path?.charAt("INBOX".length) ?? null;
+  const folderPath =
+    separator && separator !== ""
+      ? `INBOX${separator}${DEFAULT_SNOOZE_FOLDER_NAME}`
+      : DEFAULT_SNOOZE_FOLDER_NAME;
+
+  const config = buildImapConfig(account);
+  await imapCreateFolder(config, folderPath);
+  console.log(`[snooze] Created ${folderPath} to hold snoozed mail`);
+
+  // The label row appears on the next sync, when the server reports the new
+  // folder. Until then the path is enough to move mail into it.
+  return { kind: "folder", folderPath, labelId: `folder-${folderPath}` };
 }

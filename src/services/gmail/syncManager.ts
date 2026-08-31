@@ -144,7 +144,10 @@ async function syncImapAccount(accountId: string): Promise<void> {
     // Threads missing while messages exist is no longer a reason to re-sync at
     // all: that is an interrupted run, and repairMissingThreadLabels rebuilds
     // it from what is already on disk.
-    if (result.messages.length === 0) {
+    // Delta sync streams bodies to disk, so `messages` is always empty and only
+    // the count says whether anything arrived. Reading the array here would arm
+    // the destructive recovery below on every single sync.
+    if ((result.storedCount ?? result.messages.length) === 0) {
       let storedNothing = false;
       try {
         const [threadCount, messageCount] = await Promise.all([

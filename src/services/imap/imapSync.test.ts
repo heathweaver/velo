@@ -67,10 +67,20 @@ vi.mock("../db/folderSyncState", () => ({
   getAllFolderSyncStates: vi.fn(),
 }));
 vi.mock("../db/pendingOperations", () => ({
-  getPendingOpsForResource: vi.fn(() => []),
+  getResourcesWithPendingOps: vi.fn(() => new Set<string>()),
+}));
+// The desktop hands whole chunks to Rust; the web path writes row by row. Which
+// one runs is decided by the transport, so these tests can pick.
+const mockIsTauri = vi.fn(() => false);
+const mockTransportInvoke = vi.fn(() => Promise.resolve(0));
+vi.mock("../transport", () => ({
+  isTauri: () => mockIsTauri(),
+  getTransport: () => ({
+    invoke: (...args: unknown[]) => mockTransportInvoke(...(args as [])),
+  }),
 }));
 
-import { imapMessageToParsedMessage, imapInitialSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
+import { imapMessageToParsedMessage, imapInitialSync, imapDeltaSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
 import {
   createMockImapMessage,
   createMockImapAccount,
@@ -78,13 +88,14 @@ import {
   createMockImapFolderStatus,
   createMockImapFetchResult,
 } from "@/test/mocks";
-import { imapListFolders, imapSearchFolder, imapFetchMessages } from "./tauriCommands";
+import { imapListFolders, imapSearchFolder, imapFetchMessages, imapDeltaCheck } from "./tauriCommands";
 import { getAccount } from "../db/accounts";
 import { withTransaction } from "../db/connection";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, deleteThread } from "../db/threads";
 import { upsertAttachment } from "../db/attachments";
-import { getPendingOpsForResource } from "../db/pendingOperations";
+import { getResourcesWithPendingOps } from "../db/pendingOperations";
+import { getAllFolderSyncStates, upsertFolderSyncState } from "../db/folderSyncState";
 
 describe("imapMessageToParsedMessage", () => {
   it("converts basic IMAP message to ParsedMessage format", () => {
@@ -266,6 +277,9 @@ describe("imapInitialSync", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -357,6 +371,20 @@ describe("imapInitialSync", () => {
     expect(accountId).toBe("acc-1");
     expect(messageIds).toHaveLength(1);
     expect(threadId).toBeTruthy();
+  });
+
+  it("keeps the placeholder thread of a message it was told not to re-parent", async () => {
+    // Messages cascade-delete with their thread. A thread held back for pending
+    // local ops never leaves its placeholder, so deleting that placeholder as
+    // an orphan deletes the mail itself.
+    const msg = createMockImapMessage({ uid: 1, message_id: "<m1@test>", date: Math.floor(Date.now() / 1000) });
+    setupFolderWithMessages("INBOX", [msg]);
+    vi.mocked(getResourcesWithPendingOps).mockImplementation(async (_a, ids) => new Set(ids));
+
+    await imapInitialSync("acc-1");
+
+    expect(mockUpdateMessageThreadIds).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteThread)).not.toHaveBeenCalled();
   });
 
   it("returns empty messages array (bodies not accumulated)", async () => {
@@ -504,6 +532,9 @@ describe("imapInitialSync", () => {
     // Reset and use a simpler approach: single chunk that fails
     vi.clearAllMocks();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
 
     const msgs = Array.from({ length: 2 }, (_, i) =>
       createMockImapMessage({ uid: i + 1, message_id: `<m${i}@test>`, date: Math.floor(Date.now() / 1000) }),
@@ -687,6 +718,9 @@ describe("imapInitialSync — all-folders-fail propagation", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -726,6 +760,9 @@ describe("imapInitialSync — placeholder cleanup", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    // clearAllMocks clears calls, not implementations, so a test that stubs
+    // pending ops would otherwise leak "everything is skipped" into the rest.
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
   });
 
   afterEach(() => {
@@ -764,4 +801,196 @@ describe("imapInitialSync — placeholder cleanup", () => {
     expect(mockDeleteThread).toHaveBeenCalled();
   });
 
+});
+describe("imapDeltaSync", () => {
+  const mockGetAccount = vi.mocked(getAccount);
+  const mockImapListFolders = vi.mocked(imapListFolders);
+  const mockImapFetchMessages = vi.mocked(imapFetchMessages);
+  const mockImapDeltaCheck = vi.mocked(imapDeltaCheck);
+  const mockGetAllFolderSyncStates = vi.mocked(getAllFolderSyncStates);
+  const mockUpsertMessage = vi.mocked(upsertMessage);
+  const mockUpdateMessageThreadIds = vi.mocked(updateMessageThreadIds);
+
+  /** One already-synced folder holding `messages` worth of new mail. */
+  function setupDelta(messages: ReturnType<typeof createMockImapMessage>[]) {
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: messages.length }),
+    ]);
+    mockGetAllFolderSyncStates.mockResolvedValue([
+      {
+        account_id: "acc-1",
+        folder_path: "INBOX",
+        uidvalidity: 1,
+        last_uid: 0,
+        modseq: null,
+        last_sync_at: 0,
+        window_days: 365,
+      },
+    ] as never);
+    mockImapDeltaCheck.mockResolvedValue([
+      {
+        folder: "INBOX",
+        uidvalidity: 1,
+        new_uids: messages.map((m) => m.uid),
+        uidvalidity_changed: false,
+      },
+    ] as never);
+    mockImapFetchMessages.mockResolvedValue(createMockImapFetchResult(messages));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
+  });
+
+  afterEach(() => {
+    mockImapFetchMessages.mockReset();
+    mockImapListFolders.mockReset();
+    mockImapDeltaCheck.mockReset();
+    mockGetAllFolderSyncStates.mockReset();
+  });
+
+  it("writes each message as it arrives rather than at the end", async () => {
+    // The failure this exists for: delta sync used to hold every parsed message
+    // and every raw IMAP message until the last folder finished — two copies of
+    // every body in memory for the length of the run.
+    const msg = createMockImapMessage({ uid: 1, message_id: "<d1@test>", date: Math.floor(Date.now() / 1000) });
+    setupDelta([msg]);
+
+    await imapDeltaSync("acc-1");
+
+    expect(mockUpsertMessage).toHaveBeenCalledTimes(1);
+    // Stored under a placeholder thread, then re-parented by the threading pass.
+    expect(mockUpsertMessage.mock.calls[0]![0]!.threadId).toBe(
+      mockUpsertMessage.mock.calls[0]![0]!.id,
+    );
+    expect(mockUpdateMessageThreadIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns no bodies, and a count of what it stored", async () => {
+    const msg = createMockImapMessage({ uid: 1, message_id: "<d1@test>", date: Math.floor(Date.now() / 1000) });
+    setupDelta([msg]);
+
+    const result = await imapDeltaSync("acc-1");
+
+    // The count is what tells the caller anything arrived: an empty `messages`
+    // array no longer means an empty sync.
+    expect(result.messages).toEqual([]);
+    expect(result.storedCount).toBe(1);
+  });
+
+  it("records sync state for a folder that turns out to be empty", async () => {
+    // A folder with no state looks new, so delta sync searches it from scratch.
+    // Not recording the result of that search left it looking new next time
+    // too: two empty folders were being re-searched every fifteen seconds, for
+    // ever, dragging the whole sync machinery along behind them.
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX.Spam", raw_path: "INBOX.Spam", exists: 0 }),
+    ]);
+    mockGetAllFolderSyncStates.mockResolvedValue([]);
+    vi.mocked(imapSearchFolder).mockResolvedValue({
+      uids: [],
+      folder_status: createMockImapFolderStatus({ exists: 0, uidvalidity: 42 }),
+    });
+
+    await imapDeltaSync("acc-1");
+
+    expect(vi.mocked(upsertFolderSyncState)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id: "acc-1",
+        folder_path: "INBOX.Spam",
+        uidvalidity: 42,
+        last_uid: 0,
+      }),
+    );
+  });
+
+  it("reports nothing stored when there is nothing new", async () => {
+    setupDelta([]);
+
+    const result = await imapDeltaSync("acc-1");
+
+    expect(result.storedCount).toBe(0);
+    expect(mockUpsertMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("chunk storage transport", () => {
+  const mockImapListFolders = vi.mocked(imapListFolders);
+  const mockImapSearchFolder = vi.mocked(imapSearchFolder);
+  const mockImapFetchMessages = vi.mocked(imapFetchMessages);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAccount).mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
+    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
+    const msg = createMockImapMessage({
+      uid: 7,
+      message_id: "<t1@test>",
+      subject: "Chunked",
+      date: Math.floor(Date.now() / 1000),
+    });
+    mockImapListFolders.mockResolvedValue([
+      createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: 1 }),
+    ]);
+    mockImapSearchFolder.mockResolvedValue({
+      uids: [7],
+      folder_status: createMockImapFolderStatus({ exists: 1 }),
+    });
+    mockImapFetchMessages.mockResolvedValue(createMockImapFetchResult([msg]));
+  });
+
+  afterEach(() => {
+    mockIsTauri.mockReturnValue(false);
+    mockImapFetchMessages.mockReset();
+    mockImapListFolders.mockReset();
+    mockImapSearchFolder.mockReset();
+  });
+
+  it("sends the whole chunk to Rust in one call on the desktop", async () => {
+    // The point of the move: one crossing of the IPC boundary per chunk instead
+    // of a statement per row, and a real transaction around it.
+    mockIsTauri.mockReturnValue(true);
+
+    await imapInitialSync("acc-1");
+
+    expect(mockTransportInvoke).toHaveBeenCalledWith(
+      "db_store_chunk",
+      expect.objectContaining({ messages: expect.any(Array) }),
+    );
+    const [, args] = mockTransportInvoke.mock.calls[0] as [string, { messages: unknown[] }];
+    expect(args.messages).toHaveLength(1);
+    expect(args.messages[0]).toMatchObject({
+      id: expect.stringContaining("INBOX"),
+      accountId: "acc-1",
+      subject: "Chunked",
+      imapUid: 7,
+      imapFolder: "INBOX",
+    });
+    // The row-by-row path must not also run.
+    expect(vi.mocked(upsertMessage)).not.toHaveBeenCalled();
+  });
+
+  it("still writes row by row where there is no Rust to call", async () => {
+    // The web build talks to the SQL gateway over HTTP and has no command to
+    // invoke, so it keeps the original path.
+    mockIsTauri.mockReturnValue(false);
+
+    await imapInitialSync("acc-1");
+
+    expect(mockTransportInvoke).not.toHaveBeenCalled();
+    expect(vi.mocked(upsertMessage)).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to row-by-row writes when the Rust call fails", async () => {
+    // A sync that stores nothing is worse than a slow one, and this path is the
+    // newer of the two.
+    mockIsTauri.mockReturnValue(true);
+    mockTransportInvoke.mockRejectedValueOnce(new Error("no such command") as never);
+
+    await imapInitialSync("acc-1");
+
+    expect(vi.mocked(upsertMessage)).toHaveBeenCalledTimes(1);
+  });
 });

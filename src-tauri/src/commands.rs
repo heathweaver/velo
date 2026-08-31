@@ -84,6 +84,15 @@ pub async fn imap_set_flags(
 }
 
 #[tauri::command]
+pub async fn imap_create_folder(
+    config: ImapConfig,
+    folder: String,
+    priority: Option<String>,
+) -> Result<(), String> {
+    ops::imap_create_folder(config, folder, Priority::from_label(priority.as_deref())).await
+}
+
+#[tauri::command]
 pub async fn imap_move_messages(
     config: ImapConfig,
     folder: String,
@@ -197,4 +206,48 @@ pub async fn smtp_send_email(
 #[tauri::command]
 pub async fn smtp_test_connection(config: SmtpConfig) -> Result<SmtpSendResult, String> {
     ops::smtp_test_connection(config).await
+}
+
+// ---------- Storage commands ----------
+
+/// The app's SQLite database, opened once and kept for the process lifetime.
+///
+/// This is a second connection to the file the SQL plugin already owns, which
+/// WAL permits — readers and one writer at a time. Overlapping *writers* are
+/// what SQLite refuses, and the frontend keeps its own write mutex, so storage
+/// calls go through that same queue rather than racing the plugin.
+static DB: tokio::sync::OnceCell<sqlx::SqlitePool> = tokio::sync::OnceCell::const_new();
+
+async fn db(app: &tauri::AppHandle) -> Result<&'static sqlx::SqlitePool, String> {
+    DB.get_or_try_init(|| async {
+        let path = tauri::Manager::path(app)
+            .app_config_dir()
+            .map_err(|e| format!("no app config dir: {e}"))?
+            .join("velo.db");
+
+        // Deliberately not create_if_missing: the file is made by the SQL plugin
+        // and shaped by the frontend's migrations. Creating it here would mean
+        // writing into an empty database with no tables, and failing loudly is
+        // the more useful answer.
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(30));
+
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|e| format!("open {}: {e}", path.display()))
+    })
+    .await
+}
+
+/// Store a fetched chunk of messages in one transaction.
+#[tauri::command]
+pub async fn db_store_chunk(
+    app: tauri::AppHandle,
+    messages: Vec<velo_core::store::StoredMessage>,
+) -> Result<usize, String> {
+    velo_core::store::store_chunk(db(&app).await?, &messages).await
 }

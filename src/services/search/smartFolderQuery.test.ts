@@ -103,12 +103,12 @@ describe("getSmartFolderSearchQuery", () => {
 
   it("respects custom limit", () => {
     const { params } = getSmartFolderSearchQuery("is:unread", "acc-1", 25);
-    expect(params[params.length - 1]).toBe(25);
+    expect(params.slice(-2)).toEqual([25, 0]);
   });
 
   it("defaults to limit 50", () => {
     const { params } = getSmartFolderSearchQuery("is:unread", "acc-1");
-    expect(params[params.length - 1]).toBe(50);
+    expect(params.slice(-2)).toEqual([50, 0]);
   });
 });
 
@@ -273,5 +273,46 @@ describe("mapSmartFolderRows", () => {
     expect(result[0]!.lastMessageAt).toBe(1700000000);
     expect(result[0]!.fromName).toBe("Carol");
     expect(result[0]!.fromAddress).toBe("carol@example.com");
+  });
+});
+
+describe("mapSmartFolderRows — across accounts", () => {
+  const row = (accountId: string, threadId: string): SmartFolderRow => ({
+    message_id: `${accountId}-${threadId}`,
+    account_id: accountId,
+    thread_id: threadId,
+    subject: "Shared subject",
+    from_name: "Alice",
+    from_address: "alice@example.com",
+    snippet: "Hello...",
+    date: 1700000000,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetThreadLabelIds.mockResolvedValue(["INBOX"]);
+    mockGetThreadById.mockResolvedValue(undefined);
+  });
+
+  it("keeps the same thread id from two different accounts", async () => {
+    // Thread ids come from message headers, so a message sent to two of your
+    // addresses carries the same id in both mailboxes. Keyed on the id alone,
+    // one account's copy vanished from the combined list.
+    const threads = await mapSmartFolderRows([
+      row("acc-1", "thread-1"),
+      row("acc-2", "thread-1"),
+    ]);
+
+    expect(threads).toHaveLength(2);
+    expect(threads.map((t) => t.accountId)).toEqual(["acc-1", "acc-2"]);
+  });
+
+  it("still collapses repeats of one thread within an account", async () => {
+    const threads = await mapSmartFolderRows([
+      row("acc-1", "thread-1"),
+      row("acc-1", "thread-1"),
+    ]);
+
+    expect(threads).toHaveLength(1);
   });
 });

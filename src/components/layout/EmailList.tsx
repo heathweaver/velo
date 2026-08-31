@@ -295,7 +295,10 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
         const rows = await db.select<SmartFolderRow[]>(sql, params);
         const mapped = await mapSmartFolderRows(rows);
         setThreads(mapped);
-        setHasMore(false); // Smart folders load all at once
+        // These lists page like any other. They used to claim there was nothing
+        // more to load, which capped the combined inbox at a single page and
+        // hid every thread past it.
+        setHasMore(rows.length === PAGE_SIZE)
       } else {
         let dbThreads;
         // Server-side category filtering for inbox
@@ -323,11 +326,37 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   }, [activeAccountId, activeLabel, activeCategory, isSmartFolder, activeSmartFolder, setThreads, setLoading, mapDbThreads, clearSearch]);
 
   const loadMore = useCallback(async () => {
-    if (!activeAccountId || loadingMore || !hasMore) return;
+    if (loadingMore || !hasMore) return;
+    // The combined inbox spans every mailbox and so has no active account; only
+    // the per-account paths below need one.
+    if (!activeAccountId && !isAllInboxes) return;
 
     setLoadingMore(true);
     try {
       const offset = threads.length;
+
+      if (isAllInboxes || (isSmartFolder && activeSmartFolder)) {
+        const query = isAllInboxes ? "label:inbox" : activeSmartFolder!.query;
+        const scopeToAccount =
+          isAllInboxes || activeSmartFolder?.searchAllAccounts
+            ? undefined
+            : activeAccountId ?? undefined;
+        const { sql, params } = getSmartFolderSearchQuery(
+          query,
+          scopeToAccount,
+          PAGE_SIZE,
+          offset,
+        );
+        const db = await getDb();
+        const rows = await db.select<SmartFolderRow[]>(sql, params);
+        const mapped = await mapSmartFolderRows(rows);
+        if (mapped.length > 0) setThreads([...threads, ...mapped]);
+        setHasMore(rows.length === PAGE_SIZE);
+        return;
+      }
+
+      if (!activeAccountId) return;
+
       let dbThreads;
       if (activeLabel === "inbox" && activeCategory !== "All") {
         dbThreads = await getThreadsForCategory(activeAccountId, activeCategory, PAGE_SIZE, offset);
@@ -351,7 +380,19 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
     } finally {
       setLoadingMore(false);
     }
-  }, [activeAccountId, activeLabel, activeCategory, threads, loadingMore, hasMore, setThreads, mapDbThreads]);
+  }, [
+    activeAccountId,
+    activeLabel,
+    activeCategory,
+    threads,
+    loadingMore,
+    hasMore,
+    isAllInboxes,
+    isSmartFolder,
+    activeSmartFolder,
+    setThreads,
+    mapDbThreads,
+  ]);
 
   useEffect(() => {
     loadThreads();

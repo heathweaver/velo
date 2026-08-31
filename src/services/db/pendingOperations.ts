@@ -144,6 +144,30 @@ export async function getPendingOpsForResource(
   );
 }
 
+/**
+ * Which of these resources have pending local operations.
+ *
+ * Sync asks this about every thread it is about to write, to leave alone the
+ * ones the user has already acted on. Asking per thread meant a query per
+ * thread — thousands of round trips in a single sync — when one question covers
+ * the whole batch.
+ */
+export async function getResourcesWithPendingOps(
+  accountId: string,
+  resourceIds: string[],
+): Promise<Set<string>> {
+  if (resourceIds.length === 0) return new Set();
+
+  const db = await getDb();
+  const placeholders = resourceIds.map((_, i) => `$${i + 2}`).join(", ");
+  const rows = await db.select<{ resource_id: string }[]>(
+    `SELECT DISTINCT resource_id FROM pending_operations
+     WHERE account_id = $1 AND status = 'pending' AND resource_id IN (${placeholders})`,
+    [accountId, ...resourceIds],
+  );
+  return new Set(rows.map((r) => r.resource_id));
+}
+
 export async function compactQueue(accountId?: string): Promise<number> {
   const db = await getDb();
 

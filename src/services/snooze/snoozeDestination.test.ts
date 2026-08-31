@@ -11,6 +11,16 @@ vi.mock("../db/accounts", () => ({
   getAccount: (...args: unknown[]) => mockGetAccount(...(args as [])),
 }));
 
+const mockCreateFolder = vi.fn(() => Promise.resolve());
+
+vi.mock("../imap/imapConfigBuilder", () => ({
+  buildImapConfig: () => ({ host: "imap.example.com" }),
+}));
+
+vi.mock("../imap/tauriCommands", () => ({
+  imapCreateFolder: (...args: unknown[]) => mockCreateFolder(...(args as [])),
+}));
+
 import { resolveSnoozeDestination } from "./snoozeDestination";
 
 function imapAccount() {
@@ -67,15 +77,43 @@ describe("resolveSnoozeDestination", () => {
     });
   });
 
-  it("returns nothing when the account has no suitable folder", async () => {
-    // The caller then refuses to snooze rather than hiding the mail locally
-    // and letting the next sync bring it straight back.
+  it("creates a Later folder when the account has none", async () => {
     mockGetAccount.mockResolvedValue(imapAccount());
     mockSelect.mockResolvedValue([
       { id: "folder-INBOX.Archive", name: "Archive", imap_folder_path: "INBOX.Archive" },
     ]);
 
-    expect(await resolveSnoozeDestination("acc-1")).toBeNull();
+    const destination = await resolveSnoozeDestination("acc-1");
+
+    expect(destination).toMatchObject({ kind: "folder", folderPath: "INBOX.Later" });
+    expect(mockCreateFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "imap.example.com" }),
+      "INBOX.Later",
+    );
+  });
+
+  it("takes the hierarchy separator from an existing folder rather than assuming", async () => {
+    // Servers differ: "." on Dovecot, "/" elsewhere. Guessing wrong creates a
+    // mailbox with a literal dot or slash in its name.
+    mockGetAccount.mockResolvedValue(imapAccount());
+    mockSelect.mockResolvedValue([
+      { id: "folder-INBOX/Archive", name: "Archive", imap_folder_path: "INBOX/Archive" },
+    ]);
+
+    await resolveSnoozeDestination("acc-1");
+
+    expect(mockCreateFolder).toHaveBeenCalledWith(expect.anything(), "INBOX/Later");
+  });
+
+  it("creates a top-level folder when nothing is nested under INBOX", async () => {
+    mockGetAccount.mockResolvedValue(imapAccount());
+    mockSelect.mockResolvedValue([
+      { id: "folder-Archive", name: "Archive", imap_folder_path: "Archive" },
+    ]);
+
+    await resolveSnoozeDestination("acc-1");
+
+    expect(mockCreateFolder).toHaveBeenCalledWith(expect.anything(), "Later");
   });
 
   it("uses a label on Gmail, since its own snooze is not in the API", async () => {

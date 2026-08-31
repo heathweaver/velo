@@ -91,7 +91,8 @@ describe("buildSearchQuery", () => {
     const parsed: ParsedSearchQuery = { freeText: "test" };
     const { sql, params } = buildSearchQuery(parsed, undefined, 25);
     expect(sql).toContain("LIMIT");
-    expect(params[params.length - 1]).toBe(25);
+    // The offset trails the limit now that these lists page.
+    expect(params.slice(-2)).toEqual([25, 0]);
   });
 
   it("combines free text with operators", () => {
@@ -111,7 +112,8 @@ describe("buildSearchQuery", () => {
   it("uses date DESC ordering when no free text", () => {
     const parsed: ParsedSearchQuery = { freeText: "", isUnread: true };
     const { sql } = buildSearchQuery(parsed);
-    expect(sql).toContain("ORDER BY m.date DESC");
+    // Ordered by the thread's newest message, which the grouping aliases.
+    expect(sql).toContain("ORDER BY date DESC");
     expect(sql).not.toContain("ORDER BY rank");
   });
 
@@ -130,5 +132,56 @@ describe("buildSearchQuery", () => {
     // The value should be in params, not interpolated into SQL
     expect(sql).not.toContain("DROP TABLE");
     expect(params).toContain("'; DROP TABLE messages; --");
+  });
+});
+
+describe("buildSearchQuery — paging a list of threads", () => {
+  it("counts threads, not messages, against the limit", () => {
+    // The combined inbox is this query with no account filter. Limiting
+    // messages meant a page of 50 messages collapsed into however many threads
+    // those messages belonged to — 46 of 160 on a real mailbox — and the rest
+    // were simply absent from the list.
+    const parsed: ParsedSearchQuery = { freeText: "", label: "inbox" };
+    const { sql } = buildSearchQuery(parsed, undefined, 50);
+
+    expect(sql).toContain("GROUP BY m.account_id, m.thread_id");
+    expect(sql).toContain("MAX(m.date) as date");
+    expect(sql).toContain("ORDER BY date DESC");
+  });
+
+  it("takes an offset so the list can page", () => {
+    const parsed: ParsedSearchQuery = { freeText: "", label: "inbox" };
+    const { sql, params } = buildSearchQuery(parsed, undefined, 50, 100);
+
+    expect(sql).toMatch(/LIMIT \$\d+ OFFSET \$\d+/);
+    expect(params.slice(-2)).toEqual([50, 100]);
+  });
+
+  it("defaults to the first page", () => {
+    const parsed: ParsedSearchQuery = { freeText: "", label: "inbox" };
+    const { params } = buildSearchQuery(parsed, undefined, 50);
+
+    expect(params.slice(-2)).toEqual([50, 0]);
+  });
+
+  it("omits the account filter when no account is given", () => {
+    // What makes it a combined inbox rather than the active mailbox's.
+    const parsed: ParsedSearchQuery = { freeText: "", label: "inbox" };
+    const { sql, params } = buildSearchQuery(parsed, undefined, 50);
+
+    expect(sql).not.toContain("m.account_id = $");
+    expect(params).toEqual(["inbox", 50, 0]);
+  });
+
+  it("leaves ranked free-text results one row per message", () => {
+    // Relevance is a property of a message, not a thread; the caller
+    // deduplicates these.
+    const parsed: ParsedSearchQuery = { freeText: "invoice" };
+    const { sql } = buildSearchQuery(parsed, undefined, 50, 50);
+
+    expect(sql).toContain("SELECT DISTINCT");
+    expect(sql).toContain("ORDER BY rank");
+    expect(sql).not.toContain("GROUP BY");
+    expect(sql).toMatch(/LIMIT \$\d+ OFFSET \$\d+/);
   });
 });
