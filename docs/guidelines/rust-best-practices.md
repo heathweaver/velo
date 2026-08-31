@@ -1,9 +1,21 @@
 # Rust Best Practices
 
 Required reading for `src-tauri/` work. These rules are the Rust counterpart of
-Twiglit's Fresh guideline: a written doctrine that can later become grep audits
-(when Velo has a Deno or Rust reporting kernel). **Do not add a Deno reporting
-package to this repo until the app itself is Deno.**
+Twiglit's Fresh guideline. A local reporter (`src-tauri/velo-report`) greps the
+checkable ids and writes the same JSON + HTML as `@realdigit/test-reporting`.
+**Do not add the Deno package to this repo until the app itself is Deno.**
+Frontend reporting can share the same `tests/results/` and
+`tests/reporting/data/` later.
+
+Run it from the repo root:
+
+```bash
+cargo run -p velo-report --manifest-path src-tauri/Cargo.toml -- report
+open tests/reporting/index.html
+```
+
+Agents read `tests/reporting/data/status.json` instead of rerunning tests.
+Inline suppressions: `// slop: allow <rule-id> — reason`.
 
 Two kinds of rule:
 
