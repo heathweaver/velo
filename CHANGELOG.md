@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.22](https://github.com/heathweaver/velo/compare/velo-v0.4.21...velo-v0.4.22) (2026-09-03)
+
+
+### Bug Fixes
+
+* bind OAuth server to 127.0.0.1 instead of localhost ([ec47a7a](https://github.com/heathweaver/velo/commit/ec47a7a5095bb5deffc24e9b6812e39107508dbe))
+* **icons:** inset Mac app icon to standard Dock size ([72f41a5](https://github.com/heathweaver/velo/commit/72f41a52960a5a044b3d9092bc5ea62b5c819c7b))
+* **icons:** inset whole icon tile to ~80% of canvas ([5172920](https://github.com/heathweaver/velo/commit/517292050fe47ab10ce9bbf584fc0bd774b278a6))
+* **icons:** scale app icon mark to Apple HIG margins ([100433e](https://github.com/heathweaver/velo/commit/100433ea024cdbfba868b3fac28498c44fb7381b))
+* improve sync status bar UX ([dc76dd7](https://github.com/heathweaver/velo/commit/dc76dd7e60fec0460a39a4ed5c5427723a52ad32))
+
 ## [0.4.21](https://github.com/avihaymenahem/velo/compare/velo-v0.4.20...velo-v0.4.21) (2026-02-27)
 
 
