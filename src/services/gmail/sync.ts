@@ -383,8 +383,9 @@ export async function deltaSync(
     );
     const vipSenders = smartNotifications ? await getVipSenders(accountId) : new Set<string>();
 
-    // Re-fetch affected threads in parallel (max 5 concurrent)
+    // Re-fetch affected threads in parallel (max 10 concurrent fetch; store is serialised)
     const threadIds = [...affectedThreadIds];
+    let storeFailures = 0;
     await parallelLimit(
       threadIds.map((threadId) => async () => {
         try {
@@ -400,7 +401,12 @@ export async function deltaSync(
           if (!thread.messages || thread.messages.length === 0) return;
 
           const parsedMessages = thread.messages.map(parseGmailMessage);
-          await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          // Same as initial sync: concurrent stores contended for the single
+          // SQLite writer and advanced history_id anyway, permanently skipping
+          // threads that failed with "database is locked".
+          await withTransaction(async () => {
+            await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          });
 
           // Auto-archive muted threads that reappear in INBOX
           if (mutedThreadIds.has(threadId)) {
@@ -450,13 +456,22 @@ export async function deltaSync(
               .catch((err) => console.error("Smart label error:", err));
           }
         } catch (err) {
+          storeFailures++;
           console.error(`Failed to re-sync thread ${threadId}:`, err);
         }
       }),
       10,
     );
 
-    await updateAccountSyncState(accountId, latestHistoryId);
+    // Only advance history when every affected thread landed. Otherwise the
+    // next delta starts past the failed ones and they never retry.
+    if (storeFailures === 0) {
+      await updateAccountSyncState(accountId, latestHistoryId);
+    } else {
+      console.warn(
+        `[deltaSync] ${storeFailures} thread(s) failed to store — NOT advancing history_id so they can be retried`,
+      );
+    }
 
     // Fire-and-forget AI categorization for new threads
     import("@/services/ai/categorizationManager")
