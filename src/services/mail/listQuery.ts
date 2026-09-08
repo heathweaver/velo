@@ -47,6 +47,11 @@ export interface ResolveThreadListQueryInput {
   activeCategory: string;
   smartFolderQuery: string | null;
   smartFolderSearchAllAccounts: boolean;
+  /**
+   * When viewing Snoozed on IMAP, the real label is often `folder-INBOX.Later`
+   * (Spark), not Gmail's `SNOOZED`. Pass the looked-up id so the list matches.
+   */
+  snoozeLabelId?: string | null;
 }
 
 /**
@@ -87,10 +92,16 @@ export function resolveThreadListQuery(
 
   if (activeLabel in SYSTEM_LABEL_MAP) {
     const mapped = SYSTEM_LABEL_MAP[activeLabel]!;
+    const labelId =
+      activeLabel === "snoozed" && input.snoozeLabelId
+        ? input.snoozeLabelId
+        : mapped === ""
+          ? undefined
+          : mapped;
     return {
       type: "label",
       accountId: activeAccountId,
-      labelId: mapped === "" ? undefined : mapped,
+      labelId,
     };
   }
 

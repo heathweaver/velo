@@ -29,6 +29,7 @@ import { getSmartFolderSearchQuery, mapSmartFolderRows, type SmartFolderRow } fr
 import { getDb } from "@/services/db/connection";
 import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
 import { resolveThreadListQuery, SYSTEM_LABEL_MAP } from "@/services/mail/listQuery";
+import { lookupSnoozeLabelId } from "@/services/snooze/snoozeDestination";
 import { Archive, Trash2, X, Ban, Filter, ChevronRight, Package, FolderSearch, Pencil } from "lucide-react";
 import { EmptyState } from "../ui/EmptyState";
 import {
@@ -295,12 +296,17 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
         // hid every thread past it.
         setHasMore(rows.length === PAGE_SIZE)
       } else {
+        const snoozeLabelId =
+          activeLabel === "snoozed" && activeAccountId
+            ? await lookupSnoozeLabelId(activeAccountId)
+            : null;
         const listQuery = resolveThreadListQuery({
           activeAccountId,
           activeLabel,
           activeCategory,
           smartFolderQuery: null,
           smartFolderSearchAllAccounts: false,
+          snoozeLabelId,
         });
         if (!listQuery || listQuery.type === "smart") {
           setThreads([]);
@@ -362,12 +368,17 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
 
       if (!activeAccountId) return;
 
+      const snoozeLabelId =
+        activeLabel === "snoozed"
+          ? await lookupSnoozeLabelId(activeAccountId)
+          : null;
       const listQuery = resolveThreadListQuery({
         activeAccountId,
         activeLabel,
         activeCategory,
         smartFolderQuery: null,
         smartFolderSearchAllAccounts: false,
+        snoozeLabelId,
       });
       if (!listQuery || listQuery.type === "smart") return;
 

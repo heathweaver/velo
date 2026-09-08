@@ -46,6 +46,35 @@ describe("SYSTEM_SIDEBAR_VIEWS → label filter", () => {
     expect(q).toEqual({ type: "label", accountId: ACCOUNT, labelId: undefined });
   });
 
+  it("snoozed uses Spark Later folder label when provided (not Gmail SNOOZED)", () => {
+    // realdigit IMAP: mail lives under folder-INBOX.Later; querying SNOOZED
+    // shows 0 conversations while Spark's Snoozed list is full.
+    const q = resolveThreadListQuery({
+      activeAccountId: ACCOUNT,
+      activeLabel: "snoozed",
+      activeCategory: "All",
+      smartFolderQuery: null,
+      smartFolderSearchAllAccounts: false,
+      snoozeLabelId: "folder-INBOX.Later",
+    });
+    expect(q).toEqual({
+      type: "label",
+      accountId: ACCOUNT,
+      labelId: "folder-INBOX.Later",
+    });
+  });
+
+  it("snoozed falls back to SNOOZED when no override is given", () => {
+    const q = resolveThreadListQuery({
+      activeAccountId: ACCOUNT,
+      activeLabel: "snoozed",
+      activeCategory: "All",
+      smartFolderQuery: null,
+      smartFolderSearchAllAccounts: false,
+    });
+    expect(q).toEqual({ type: "label", accountId: ACCOUNT, labelId: "SNOOZED" });
+  });
+
   it("every system sidebar view is covered by SYSTEM_LABEL_MAP", () => {
     for (const view of SYSTEM_SIDEBAR_VIEWS) {
       expect(SYSTEM_LABEL_MAP[view]).toBeDefined();
