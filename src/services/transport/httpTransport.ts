@@ -12,7 +12,10 @@ import type { Transport, ExecuteResult } from "./types";
 import { COMMAND_ROUTES } from "./commandRoutes";
 
 /** Base URL for the API. Empty string = same origin (server serves the SPA). */
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const API_BASE =
+  ((typeof import.meta !== "undefined" &&
+    (import.meta as unknown as { env?: { VITE_API_BASE?: string } })?.env
+      ?.VITE_API_BASE) as string | undefined) ?? "";
 
 /**
  * IMAP/SMTP commands carry a `config` object. On the web, that config has a

@@ -3,26 +3,30 @@
  * Tauri IPC (`invoke`), SQL goes through the Tauri SQL plugin's SQLite database.
  */
 
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import Database from "@tauri-apps/plugin-sql";
 import type { Transport, ExecuteResult } from "./types";
 
-let dbPromise: Promise<Database> | null = null;
+interface TauriSqlDb {
+  select<T>(query: string, params?: unknown[]): Promise<T>;
+  execute(query: string, params?: unknown[]): Promise<{ rowsAffected: number; lastInsertId?: number }>;
+}
 
-function db(): Promise<Database> {
+let dbPromise: Promise<TauriSqlDb> | null = null;
+
+async function db(): Promise<TauriSqlDb> {
   if (!dbPromise) {
-    dbPromise = Database.load("sqlite:velo.db").then(async (database) => {
-      // journal_mode is persisted in the database file, so this applies to every
-      // connection in the plugin's pool: readers stop blocking the writer.
+    dbPromise = (async () => {
+      const { default: Database } = await import("@tauri-apps/plugin-sql");
+      const database = await Database.load("sqlite:velo.db");
       await database.execute("PRAGMA journal_mode=WAL");
       return database;
-    });
+    })();
   }
   return dbPromise;
 }
 
 export const tauriTransport: Transport = {
-  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
     return tauriInvoke<T>(command, args);
   },
   async select<T>(query: string, params: unknown[] = []): Promise<T> {

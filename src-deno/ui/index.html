@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Velo Mail</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              'bg-primary': 'var(--color-bg-primary, #ffffff)',
+              'bg-secondary': 'var(--color-bg-secondary, #fbfbfc)',
+              'bg-tertiary': 'var(--color-bg-tertiary, #f1f3f6)',
+              'bg-hover': 'var(--color-bg-hover, rgba(26, 54, 93, 0.05))',
+              'bg-selected': 'var(--color-bg-selected, rgba(26, 54, 93, 0.09))',
+              'text-primary': 'var(--color-text-primary, #2d3748)',
+              'text-secondary': 'var(--color-text-secondary, #4a5568)',
+              'text-tertiary': 'var(--color-text-tertiary, #718096)',
+              'border-primary': 'var(--color-border-primary, rgba(26, 54, 93, 0.12))',
+              'border-secondary': 'var(--color-border-secondary, rgba(26, 54, 93, 0.06))',
+              'accent': 'var(--color-accent, #1a365d)',
+              'accent-hover': 'var(--color-accent-hover, #2d4a6f)',
+              'sidebar-bg': 'var(--color-sidebar-bg, #1a365d)',
+              'sidebar-text': 'var(--color-sidebar-text, #e8edf5)',
+              'danger': '#991b1b',
+              'success': '#166534',
+              'warning': '#d97706',
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="../styles/globals.css" />
+  </head>
+  <body class="bg-bg-primary text-text-primary h-full w-full overflow-hidden">
+    <velo-app></velo-app>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>

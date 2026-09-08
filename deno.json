@@ -1,0 +1,23 @@
+{
+  "packageJson": false,
+  "nodeModulesDir": "manual",
+  "unstable": ["sloppy-imports"],
+  "compilerOptions": {
+    "lib": ["deno.window", "dom", "dom.iterable", "esnext"],
+    "types": [],
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "imports": {
+    "@/": "./src/",
+    "@deno/": "./src-deno/",
+    "zustand": "./node_modules/zustand/esm/index.js",
+    "zustand/vanilla": "./node_modules/zustand/esm/vanilla.js",
+    "dompurify": "./node_modules/dompurify/dist/purify.es.mjs"
+  },
+  "tasks": {
+    "desktop": "deno desktop src-deno/main.ts",
+    "check": "deno check src-deno/main.ts"
+  }
+}

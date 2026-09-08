@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #fbfbfc;
+  --color-bg-tertiary: #f1f3f6;
+  --color-bg-hover: rgba(26, 54, 93, 0.05);
+  --color-bg-selected: rgba(26, 54, 93, 0.09);
+
+  --color-text-primary: #2d3748;
+  --color-text-secondary: #4a5568;
+  --color-text-tertiary: #718096;
+
+  --color-border-primary: rgba(26, 54, 93, 0.12);
+  --color-border-secondary: rgba(26, 54, 93, 0.06);
+
+  --color-accent: #1a365d;
+  --color-accent-hover: #2d4a6f;
+  --color-accent-light: #e4eaf3;
+
+  --color-danger: #991b1b;
+  --color-warning: #d97706;
+  --color-success: #166534;
+
+  --color-sidebar-bg: #1a365d;
+  --color-sidebar-text: #e8edf5;
+  --color-sidebar-hover: rgba(255, 255, 255, 0.08);
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+.dark {
+  --color-bg-primary: #0f172a;
+  --color-bg-secondary: #1e293b;
+  --color-bg-tertiary: #334155;
+  --color-bg-hover: rgba(51, 65, 85, 0.58);
+  --color-bg-selected: rgba(30, 58, 95, 0.68);
+
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #cbd5e1;
+  --color-text-tertiary: #94a3b8;
+
+  --color-border-primary: rgba(255, 255, 255, 0.1);
+  --color-border-secondary: rgba(255, 255, 255, 0.06);
+
+  --color-accent: #818cf8;
+  --color-accent-hover: #6366f1;
+  --color-accent-light: #312e81;
+
+  --color-sidebar-bg: #0f172a;
+  --color-sidebar-text: #e2e8f0;
+  --color-sidebar-hover: rgba(30, 41, 59, 0.7);
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
