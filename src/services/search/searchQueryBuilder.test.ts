@@ -19,6 +19,23 @@ describe("buildSearchQuery", () => {
     expect(params).toContain("john");
   });
 
+  it("uses exact from_address match when from: is a full email", () => {
+    const parsed: ParsedSearchQuery = { freeText: "", from: "alice@company.com" };
+    const { sql, params } = buildSearchQuery(parsed);
+    expect(sql).toContain("LOWER(m.from_address) = LOWER");
+    expect(sql).not.toContain("m.from_name LIKE");
+    expect(params).toContain("alice@company.com");
+  });
+
+  it("does not substring-match other addresses when from: is an email", () => {
+    // Regression: ContactSidebar "Search all mail from this contact" used LIKE
+    // '%alice@company.com%' which also matched names/addresses containing that
+    // substring and mixed unrelated senders into the results.
+    const { sql } = buildSearchQuery({ freeText: "", from: "ben@realdigit.co" });
+    expect(sql).not.toMatch(/from_address LIKE/);
+    expect(sql).toMatch(/LOWER\(m\.from_address\) = LOWER/);
+  });
+
   it("builds to: filter", () => {
     const parsed: ParsedSearchQuery = { freeText: "", to: "jane" };
     const { sql, params } = buildSearchQuery(parsed);

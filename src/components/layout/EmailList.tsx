@@ -28,6 +28,7 @@ import { getMessagesForThread } from "@/services/db/messages";
 import { getSmartFolderSearchQuery, mapSmartFolderRows, type SmartFolderRow } from "@/services/search/smartFolderQuery";
 import { getDb } from "@/services/db/connection";
 import { ALL_INBOXES_LABEL } from "@/constants/unifiedInbox";
+import { resolveThreadListQuery, SYSTEM_LABEL_MAP } from "@/services/mail/listQuery";
 import { Archive, Trash2, X, Ban, Filter, ChevronRight, Package, FolderSearch, Pencil } from "lucide-react";
 import { EmptyState } from "../ui/EmptyState";
 import {
@@ -38,18 +39,6 @@ import {
 } from "../ui/illustrations";
 
 const PAGE_SIZE = 50;
-
-// Map sidebar labels to Gmail label IDs
-const LABEL_MAP: Record<string, string> = {
-  inbox: "INBOX",
-  starred: "STARRED",
-  sent: "SENT",
-  drafts: "DRAFT",
-  trash: "TRASH",
-  spam: "SPAM",
-  snoozed: "SNOOZED",
-  all: "", // no filter
-};
 
 export function EmailList({ width, listRef }: { width?: number; listRef?: React.Ref<HTMLDivElement> }) {
   const threads = useThreadStore((s) => s.threads);
@@ -281,14 +270,20 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
       // mailbox; actions on those rows take their account from the thread
       // rather than from activeAccountId.
       if (isAllInboxes || (isSmartFolder && activeSmartFolder)) {
-        const query = isAllInboxes ? "label:inbox" : activeSmartFolder!.query;
-        const scopeToAccount =
-          isAllInboxes || activeSmartFolder?.searchAllAccounts
-            ? undefined
-            : activeAccountId;
+        const listQuery = resolveThreadListQuery({
+          activeAccountId,
+          activeLabel,
+          activeCategory,
+          smartFolderQuery: activeSmartFolder?.query ?? null,
+          smartFolderSearchAllAccounts: !!activeSmartFolder?.searchAllAccounts,
+        });
+        if (!listQuery || listQuery.type !== "smart") {
+          setThreads([]);
+          return;
+        }
         const { sql, params } = getSmartFolderSearchQuery(
-          query,
-          scopeToAccount,
+          listQuery.query,
+          listQuery.accountId,
           PAGE_SIZE,
         );
         const db = await getDb();
@@ -300,15 +295,25 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
         // hid every thread past it.
         setHasMore(rows.length === PAGE_SIZE)
       } else {
+        const listQuery = resolveThreadListQuery({
+          activeAccountId,
+          activeLabel,
+          activeCategory,
+          smartFolderQuery: null,
+          smartFolderSearchAllAccounts: false,
+        });
+        if (!listQuery || listQuery.type === "smart") {
+          setThreads([]);
+          return;
+        }
+
         let dbThreads;
-        // Server-side category filtering for inbox
-        if (activeLabel === "inbox" && activeCategory !== "All") {
-          dbThreads = await getThreadsForCategory(activeAccountId, activeCategory, PAGE_SIZE, 0);
+        if (listQuery.type === "category") {
+          dbThreads = await getThreadsForCategory(listQuery.accountId, listQuery.category, PAGE_SIZE, 0);
         } else {
-          const gmailLabelId = LABEL_MAP[activeLabel] ?? activeLabel;
           dbThreads = await getThreadsForAccount(
-            activeAccountId,
-            gmailLabelId || undefined,
+            listQuery.accountId,
+            listQuery.labelId,
             PAGE_SIZE,
             0,
           );
@@ -357,14 +362,22 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
 
       if (!activeAccountId) return;
 
+      const listQuery = resolveThreadListQuery({
+        activeAccountId,
+        activeLabel,
+        activeCategory,
+        smartFolderQuery: null,
+        smartFolderSearchAllAccounts: false,
+      });
+      if (!listQuery || listQuery.type === "smart") return;
+
       let dbThreads;
-      if (activeLabel === "inbox" && activeCategory !== "All") {
-        dbThreads = await getThreadsForCategory(activeAccountId, activeCategory, PAGE_SIZE, offset);
+      if (listQuery.type === "category") {
+        dbThreads = await getThreadsForCategory(listQuery.accountId, listQuery.category, PAGE_SIZE, offset);
       } else {
-        const gmailLabelId = LABEL_MAP[activeLabel] ?? activeLabel;
         dbThreads = await getThreadsForAccount(
-          activeAccountId,
-          gmailLabelId || undefined,
+          listQuery.accountId,
+          listQuery.labelId,
           PAGE_SIZE,
           offset,
         );
@@ -646,7 +659,7 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
               ? activeSmartFolder?.name ?? "Smart Folder"
               : activeLabel === "inbox" && inboxViewMode === "split" && activeCategory !== "All"
                 ? `Inbox — ${activeCategory}`
-                : LABEL_MAP[activeLabel] !== undefined
+                : SYSTEM_LABEL_MAP[activeLabel] !== undefined
                   ? activeLabel
                   : userLabels.find((l) => l.id === activeLabel)?.name ?? activeLabel}
           </h2>

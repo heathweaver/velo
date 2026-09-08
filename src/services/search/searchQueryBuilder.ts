@@ -5,6 +5,14 @@ interface BuiltQuery {
   params: unknown[];
 }
 
+/** True when the token is a full email address, not a free-text name fragment. */
+export function looksLikeEmailAddress(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.includes("@") || trimmed.includes(" ")) return false;
+  const at = trimmed.indexOf("@");
+  return at > 0 && at < trimmed.length - 1;
+}
+
 /**
  * Build a parameterized SQL query from a parsed search query.
  * Returns { sql, params } for safe execution.
@@ -49,11 +57,21 @@ export function buildSearchQuery(
     paramIdx++;
   }
 
-  // from: operator
+  // from: operator — full addresses must be exact so "Search all mail from this
+  // contact" does not pull every sender whose name/address merely contains a
+  // substring. Bare names keep the broader LIKE match.
   if (parsed.from) {
-    whereClauses.push(`(m.from_address LIKE '%' || $${paramIdx} || '%' OR m.from_name LIKE '%' || $${paramIdx} || '%')`);
-    params.push(parsed.from);
-    paramIdx++;
+    if (looksLikeEmailAddress(parsed.from)) {
+      whereClauses.push(`LOWER(m.from_address) = LOWER($${paramIdx})`);
+      params.push(parsed.from);
+      paramIdx++;
+    } else {
+      whereClauses.push(
+        `(m.from_address LIKE '%' || $${paramIdx} || '%' OR m.from_name LIKE '%' || $${paramIdx} || '%')`,
+      );
+      params.push(parsed.from);
+      paramIdx++;
+    }
   }
 
   // to: operator
