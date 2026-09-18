@@ -21,7 +21,7 @@ vi.mock("../imap/tauriCommands", () => ({
   imapCreateFolder: (...args: unknown[]) => mockCreateFolder(...(args as [])),
 }));
 
-import { resolveSnoozeDestination } from "./snoozeDestination";
+import { resolveSnoozeDestination, lookupSnoozeLabelId } from "./snoozeDestination";
 
 function imapAccount() {
   return { id: "acc-1", provider: "imap" };
@@ -136,5 +136,25 @@ describe("resolveSnoozeDestination", () => {
     mockGetAccount.mockResolvedValue(null);
 
     expect(await resolveSnoozeDestination("gone")).toBeNull();
+  });
+});
+
+describe("lookupSnoozeLabelId", () => {
+  it("returns the Later folder label for IMAP without creating folders", async () => {
+    mockGetAccount.mockResolvedValue(imapAccount());
+    mockSelect.mockResolvedValue([
+      { id: "folder-INBOX.Later", name: "Later", imap_folder_path: "INBOX.Later" },
+    ]);
+
+    expect(await lookupSnoozeLabelId("acc-1")).toBe("folder-INBOX.Later");
+    expect(mockCreateFolder).not.toHaveBeenCalled();
+  });
+
+  it("does not create a folder when none exists (view-only)", async () => {
+    mockGetAccount.mockResolvedValue(imapAccount());
+    mockSelect.mockResolvedValue([]);
+
+    expect(await lookupSnoozeLabelId("acc-1")).toBeNull();
+    expect(mockCreateFolder).not.toHaveBeenCalled();
   });
 });
