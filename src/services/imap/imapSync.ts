@@ -657,6 +657,7 @@ export async function imapInitialSync(
   let storedCount = 0;
   let consecutiveFailures = 0;
   const folderErrors: string[] = [];
+  let syncIncomplete = false;
 
   for (let folderIdx = 0; folderIdx < syncableFolders.length; folderIdx++) {
     const folder = syncableFolders[folderIdx]!;
@@ -668,6 +669,7 @@ export async function imapInitialSync(
         `[imapSync] Circuit breaker: ${consecutiveFailures} consecutive connection failures, ` +
         `skipping remaining ${syncableFolders.length - folderIdx} folders`,
       );
+      syncIncomplete = true;
       break;
     }
 
@@ -724,7 +726,10 @@ export async function imapInitialSync(
       let lastUid = 0;
       const uidvalidity = searchResult.folder_status.uidvalidity;
 
-      // Phase 2b: Fetch messages in small IPC-friendly chunks
+      // Phase 2b: Fetch messages in small IPC-friendly chunks.
+      // On chunk failure, stop this folder — do not skip ahead. Skipping used
+      // to raise last_uid past the hole so delta sync never retried those UIDs.
+      let folderHadChunkFailure = false;
       for (let chunkStart = 0; chunkStart < uidsToFetch.length; chunkStart += CHUNK_SIZE) {
         const chunkUids = uidsToFetch.slice(chunkStart, chunkStart + CHUNK_SIZE);
         let chunkResult;
@@ -739,11 +744,15 @@ export async function imapInitialSync(
               chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, "background");
             } catch (retryErr) {
               console.error(`[imapSync] Chunk retry failed in ${folder.path}:`, retryErr);
-              continue;
+              folderHadChunkFailure = true;
+              syncIncomplete = true;
+              break;
             }
           } else {
             console.error(`[imapSync] Failed to fetch chunk ${chunkStart}-${chunkStart + chunkUids.length} in ${folder.path}:`, chunkErr);
-            continue;
+            folderHadChunkFailure = true;
+            syncIncomplete = true;
+            break;
           }
         }
 
@@ -795,10 +804,12 @@ export async function imapInitialSync(
       }
 
       console.log(
-        `[imapSync] Folder ${folder.path}: ${uidsToFetch.length} UIDs, ${folderFetchedCount} fetched, ${folderStoredCount} after date filter`,
+        `[imapSync] Folder ${folder.path}: ${uidsToFetch.length} UIDs, ${folderFetchedCount} fetched, ${folderStoredCount} after date filter` +
+          (folderHadChunkFailure ? " (stopped early after chunk failure)" : ""),
       );
 
-      // Update folder sync state
+      // Persist watermark only for the contiguous successful prefix (lastUid
+      // never jumps past a failed chunk because we break instead of continue).
       await upsertFolderSyncState({
         account_id: accountId,
         folder_path: folder.raw_path,
@@ -839,8 +850,12 @@ export async function imapInitialSync(
     `[imapSync] Stored ${storedCount} messages in ${threadCount} threads (found ${totalMessagesFound} on server)`,
   );
 
-  // Only mark sync as complete if messages were stored OR no messages exist on server.
-  if (storedCount > 0 || totalMessagesFound === 0) {
+  // Only mark sync as complete when all folders were processed successfully.
+  if (syncIncomplete) {
+    console.warn(
+      `[imapSync] Sync incomplete — circuit breaker or chunk failure skipped work, NOT marking sync as complete`,
+    );
+  } else if (storedCount > 0 || totalMessagesFound === 0) {
     await updateAccountSyncState(accountId, `imap-synced-${Date.now()}`);
   } else {
     console.warn(

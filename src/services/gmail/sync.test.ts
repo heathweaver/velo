@@ -45,6 +45,9 @@ vi.mock("@/services/db/bundleRules", () => ({
 vi.mock("@/services/db/pendingOperations", () => ({
   getPendingOpsForResource: vi.fn().mockResolvedValue([]),
 }));
+vi.mock("../db/connection", () => ({
+  withTransaction: async (fn: (db: unknown) => Promise<void>) => fn({}),
+}));
 
 const mockNotify = vi.fn();
 const mockShouldNotify = vi.fn().mockReturnValue(true);
@@ -180,6 +183,55 @@ describe("deltaSync notifications", () => {
     await deltaSync(client, "account-1", "99");
 
     expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("does not advance history_id when a thread store fails", async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    vi.mocked(updateAccountSyncState).mockClear();
+
+    const client = createMockClient([
+      {
+        id: "100",
+        messagesAdded: [
+          {
+            message: {
+              id: "msg-thread-fail",
+              threadId: "thread-fail",
+              labelIds: ["INBOX", "UNREAD"],
+            },
+          },
+        ],
+      },
+    ]);
+    vi.mocked(client.getThread).mockRejectedValueOnce(new Error("database is locked"));
+
+    await deltaSync(client, "account-1", "99");
+
+    expect(updateAccountSyncState).not.toHaveBeenCalled();
+  });
+
+  it("advances history_id when all affected threads store successfully", async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    vi.mocked(updateAccountSyncState).mockClear();
+
+    const client = createMockClient([
+      {
+        id: "100",
+        messagesAdded: [
+          {
+            message: {
+              id: "msg-thread-ok",
+              threadId: "thread-ok",
+              labelIds: ["INBOX", "UNREAD"],
+            },
+          },
+        ],
+      },
+    ]);
+
+    await deltaSync(client, "account-1", "99");
+
+    expect(updateAccountSyncState).toHaveBeenCalledWith("account-1", "200");
   });
 });
 
