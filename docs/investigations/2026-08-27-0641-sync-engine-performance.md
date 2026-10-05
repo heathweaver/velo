@@ -1,6 +1,6 @@
 # Investigation: Sync engine performance & first-sync completion
 
-**Timestamp**: 2026-08-27 06:41 CEST **Status**: Partially implemented (`perf/sync-metadata-first`) **Area**: sync engine, Gmail API sync, IMAP sync, SQLite writes,
+**Timestamp**: 2026-08-27 06:41 CEST **Status**: Partially implemented (`perf/sync-metadata-first`; IMAP headers-only, watermark and UI fixes landed on `feat/newsletter-skim-and-marks`, 2026-10-05) **Area**: sync engine, Gmail API sync, IMAP sync, SQLite writes,
 first-sync UX
 
 > Prior investigations: none found in this repo before this file was opened.
@@ -257,12 +257,39 @@ desktop-native or backend-sync clients use.
 
 ---
 
+## 2026-10-05 pass (`feat/newsletter-skim-and-marks`, PR #6)
+
+The checklist below was written against `perf/sync-metadata-first`, which was
+never merged; only its Gmail `format=metadata` switch and `ensureMessageBodies`
+had been carried onto this branch. IMAP was still fetching `BODY.PEEK[]` for
+every message. This pass re-audited `main`-based code and landed:
+
+| # | Bottleneck / defect | Fix |
+|---|---------------------|-----|
+| 1 | IMAP initial sync downloads every full body (`BODY.PEEK[]`) | `imap_fetch_messages` takes `headersOnly`; Rust fetches `UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER]` and parses with `parse_message_headers` (body/snippet/attachments forced to *unknown*, not `""`, so `ensureMessageBodies` still fetches them). Used for initial sync, new/rescanned folders, UIDVALIDITY resyncs, and delta passes with > `DELTA_FULL_BODY_MAX` (25) new messages. Small deltas (fresh mail) stay full so filters/skim have bodies. |
+| 2 | `format=metadata` returns "only IDs, labels and headers" (Gmail docs), but the parser dereferenced `part.body.data` / `part.body.attachmentId` unconditionally — a payload without `body` throws and the thread is dropped from sync | Optional chaining in `messageParser`; `body?` in the type; tests for a metadata-shaped message. The `multipart/mixed` attachment hint only applies if Gmail includes `mimeType` |
+| 3 | Gmail delta re-fetched *every* affected thread as `full`, even for read/archive/star changes | `full` only for threads in `messagesAdded`; `metadata` for label-only changes |
+| 4 | Gmail delta advanced `history_id` past threads that failed to store | Only advance when every thread stored; a 404 thread is deleted locally and not counted as a failure (else it would pin history forever) |
+| 5 | IMAP initial sync `continue`d past a failed chunk and still raised `last_uid` past the hole | UIDs sorted ascending; a failed chunk stops the folder; watermark is the contiguous prefix; a folder whose first chunk fails records nothing (delta treats it as new and searches with the window) |
+| 6 | Re-syncing headers-only would blank stored snippets | `snippet = COALESCE(NULLIF(new, ''), snippet)` in TS and Rust upserts (threads + messages); `fillThreadSnippetIfEmpty` on first body load |
+| 7 | Thread open blocked on the network: spinner until bodies downloaded; stale results could overwrite the next thread | Headers render from disk immediately; bodies fill in after; cancelled on thread switch; per-message in-flight dedupe; 4-way concurrency, newest first; writes queued through `withTransaction` |
+| 8 | `onSyncStatus` was a single slot: App and SyncButton overwrote each other, and either unsubscribing silenced both — finished syncs stopped refreshing the list | Listener set |
+| 9 | Every 30 s poll per account dispatched `velo-sync-done` → full list + metadata reload even when nothing changed | `deltaSync` returns the change count; IMAP delta uses `storedCount`; `done` carries `{ changed }` and App skips the refresh when false |
+| 10 | Thread list N+1: `getThreadLabelIds` per row (50/page); smart folders / All Inboxes did label + thread lookups per row (100/page) | `getThreadLabelIdsBatch` / `getThreadsByRefs` — one query per account per page |
+| 11 | IMAP `List-Unsubscribe` never extracted (mail-parser parses it as an address list) — IMAP newsletters invisible to unsubscribe + newsletter rules | Read the raw header, unfolded |
+| 12 | Messages with no text/HTML part were re-downloaded on every open | Stored with `body_text = ''` once fetched; `messageNeedsBody` checks for `NULL` |
+
+Known trade-offs: body full-text search only covers mail whose body has been
+loaded (FTS triggers index it on open); `has_attachments` for unopened mail is
+a `multipart/mixed` heuristic; the web transport ignores `headersOnly` (server
+route unchanged) and keeps full fetches.
+
 ## Recommended next steps
 
 ### P0 — Stabilise
 
 - [x] Fix delta sync write serialisation (`storeThread` wraps `withTransaction`)
-- [x] Don't mark IMAP sync done if circuit breaker skipped folders
+- [x] Don't skip past failed chunks / advance watermarks past failed stores (Gmail history_id, IMAP last_uid). Skipped folders are left unrecorded so delta resumes them as new folders
 - [ ] Add sync telemetry: phase timings, bytes fetched, lock wait time
 
 ### P1 — Metadata-first (biggest UX win)
@@ -271,6 +298,8 @@ desktop-native or backend-sync clients use.
 - [x] IMAP: header FETCH pass; body via existing `imap_fetch_message_body`
 - [x] Lazy body load on thread open (`ensureMessageBodies`)
 - [ ] Show inbox after first header page (~100 messages)
+- [ ] Background body prefetch for recent INBOX mail (keeps body search + skim warm)
+- [ ] Prefetch next thread's bodies on j/k navigation
 
 ### P2 — Reduce redundant work
 
@@ -278,6 +307,9 @@ desktop-native or backend-sync clients use.
 - [ ] Parallel IMAP folders (2–3) with shared connection pool
 - [ ] Remove/reduce `INTER_FOLDER_DELAY_MS` when server allows
 - [ ] Defer filters / AI / smart labels until after inbox paint
+- [x] Skip list reload when a poll changed nothing; batch thread-list label lookups
+- [ ] Preserve scroll/pages on sync reload (reload replaces the list with page 1)
+- [ ] Batch Gmail thread stores through a Rust `db_store_*` command like IMAP's `db_store_chunk`
 
 ### P3 — Modern IMAP + indexing
 
