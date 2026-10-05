@@ -137,7 +137,7 @@ export async function upsertThread(thread: {
     `INSERT INTO threads (id, account_id, subject, snippet, last_message_at, message_count, is_read, is_starred, is_important, has_attachments)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT(account_id, id) DO UPDATE SET
-       subject = $3, snippet = $4, last_message_at = $5, message_count = $6,
+       subject = $3, snippet = COALESCE(NULLIF($4, ''), snippet), last_message_at = $5, message_count = $6,
        is_read = $7, is_starred = $8, is_important = $9, has_attachments = $10`,
     [
       thread.id,
@@ -186,6 +186,88 @@ export async function getThreadLabelIds(
   return rows.map((r) => r.label_id);
 }
 
+/** Map key for a thread across accounts (thread ids are not globally unique). */
+export function threadKey(accountId: string, threadId: string): string {
+  return `${accountId}\u0000${threadId}`;
+}
+
+export interface ThreadRef {
+  accountId: string;
+  threadId: string;
+}
+
+/** SQLite's default variable limit is 999; stay well under it per statement. */
+const BATCH_IN_LIMIT = 500;
+
+/** Group refs by account and split each group into IN-list sized chunks. */
+function chunkRefsByAccount(refs: ThreadRef[]): { accountId: string; threadIds: string[] }[] {
+  const byAccount = new Map<string, Set<string>>();
+  for (const { accountId, threadId } of refs) {
+    let ids = byAccount.get(accountId);
+    if (!ids) {
+      ids = new Set();
+      byAccount.set(accountId, ids);
+    }
+    ids.add(threadId);
+  }
+  const chunks: { accountId: string; threadIds: string[] }[] = [];
+  for (const [accountId, ids] of byAccount) {
+    const all = [...ids];
+    for (let i = 0; i < all.length; i += BATCH_IN_LIMIT) {
+      chunks.push({ accountId, threadIds: all.slice(i, i + BATCH_IN_LIMIT) });
+    }
+  }
+  return chunks;
+}
+
+/**
+ * Label ids for many threads in one query per account.
+ *
+ * The thread list used to call getThreadLabelIds once per row — 50 IPC round
+ * trips into SQLite for every page, on every folder switch and after every
+ * sync. Keys are threadKey(accountId, threadId); threads with no labels map to
+ * an empty array.
+ */
+export async function getThreadLabelIdsBatch(refs: ThreadRef[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  for (const { accountId, threadId } of refs) result.set(threadKey(accountId, threadId), []);
+  if (refs.length === 0) return result;
+
+  const db = await getDb();
+  for (const { accountId, threadIds } of chunkRefsByAccount(refs)) {
+    const placeholders = threadIds.map((_, i) => `$${i + 2}`).join(", ");
+    const rows = await db.select<{ thread_id: string; label_id: string }[]>(
+      `SELECT thread_id, label_id FROM thread_labels WHERE account_id = $1 AND thread_id IN (${placeholders})`,
+      [accountId, ...threadIds],
+    );
+    for (const row of rows) {
+      result.get(threadKey(accountId, row.thread_id))?.push(row.label_id);
+    }
+  }
+  return result;
+}
+
+/**
+ * Thread rows for many (account, thread) pairs in one query per account,
+ * keyed by threadKey. Rows carry the thread's own columns only — no sender
+ * join — which is all the smart-folder list needs from them.
+ */
+export async function getThreadsByRefs(refs: ThreadRef[]): Promise<Map<string, DbThread>> {
+  const result = new Map<string, DbThread>();
+  if (refs.length === 0) return result;
+
+  const db = await getDb();
+  for (const { accountId, threadIds } of chunkRefsByAccount(refs)) {
+    const placeholders = threadIds.map((_, i) => `$${i + 2}`).join(", ");
+    const rows = await db.select<DbThread[]>(
+      `SELECT * FROM threads WHERE account_id = $1 AND id IN (${placeholders})`,
+      [accountId, ...threadIds],
+    );
+    for (const row of rows) result.set(threadKey(accountId, row.id), row);
+  }
+  return result;
+}
+
 export async function getThreadById(
   accountId: string,
   threadId: string,
@@ -219,6 +301,25 @@ export async function getUnreadInboxCount(): Promise<number> {
      WHERE tl.label_id = 'INBOX' AND t.is_read = 0`,
   );
   return rows[0]?.count ?? 0;
+}
+
+/**
+ * Give a thread a preview line if it has none.
+ *
+ * Headers-only sync stores IMAP threads without a snippet (there is no body to
+ * take one from); the first time a body is loaded, it can supply one. Never
+ * overwrites an existing snippet.
+ */
+export async function fillThreadSnippetIfEmpty(
+  accountId: string,
+  threadId: string,
+  snippet: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    "UPDATE threads SET snippet = $1 WHERE account_id = $2 AND id = $3 AND (snippet IS NULL OR snippet = '')",
+    [snippet, accountId, threadId],
+  );
 }
 
 export async function deleteThread(

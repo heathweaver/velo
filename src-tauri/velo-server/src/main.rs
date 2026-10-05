@@ -23,6 +23,7 @@ mod oauth_api;
 mod profile;
 mod server_crypto;
 mod state;
+mod filer;
 
 use axum::{routing::get, Router};
 use state::AppState;
@@ -59,6 +60,9 @@ async fn main() {
 
     // Background: email users when new mail arrives in their mailbox.
     notifier::spawn(state.clone());
+
+    // Optional Reads filer (VELO_FILER=1). Default off.
+    filer::spawn(state.clone());
 
     let app = build_app(state);
 

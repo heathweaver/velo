@@ -13,6 +13,7 @@ import { getMessagesForThread } from "@/services/db/messages";
 import { parseUnsubscribeUrl } from "@/components/email/MessageItem";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { triggerSync } from "@/services/gmail/syncManager";
+import { applyNewsletterMark } from "@/services/newsletterMarks";
 
 /**
  * Parse a key binding string and check if it matches a keyboard event.
@@ -43,18 +44,25 @@ function matchesKey(binding: string, e: KeyboardEvent): boolean {
  */
 function buildReverseMap(keyMap: Record<string, string>): {
   singleKey: Map<string, string>;
-  twoKeySequences: Map<string, string>; // second key -> action ID (first key is always "g")
+  /** prefix -> (second key -> action id), e.g. g→i→nav.goInbox, n→i→mark.interesting */
+  twoKeyByPrefix: Map<string, Map<string, string>>;
   ctrlCombos: Map<string, string>;
 } {
   const singleKey = new Map<string, string>();
-  const twoKeySequences = new Map<string, string>();
+  const twoKeyByPrefix = new Map<string, Map<string, string>>();
   const ctrlCombos = new Map<string, string>();
 
   for (const [id, keys] of Object.entries(keyMap)) {
     if (keys.includes(" then ")) {
-      // Two-key sequence like "g then i"
-      const secondKey = keys.split(" then ")[1]!.trim();
-      twoKeySequences.set(secondKey, id);
+      const [prefixRaw, secondRaw] = keys.split(" then ");
+      const prefix = prefixRaw!.trim();
+      const secondKey = secondRaw!.trim();
+      let secondMap = twoKeyByPrefix.get(prefix);
+      if (!secondMap) {
+        secondMap = new Map();
+        twoKeyByPrefix.set(prefix, secondMap);
+      }
+      secondMap.set(secondKey, id);
     } else if (keys.includes("+") && (keys.includes("Ctrl") || keys.includes("Cmd"))) {
       ctrlCombos.set(id, keys);
     } else {
@@ -62,7 +70,7 @@ function buildReverseMap(keyMap: Record<string, string>): {
     }
   }
 
-  return { singleKey, twoKeySequences, ctrlCombos };
+  return { singleKey, twoKeyByPrefix, ctrlCombos };
 }
 
 // Cached reverse map to avoid rebuilding on every keypress
@@ -100,7 +108,7 @@ export function useKeyboardShortcuts() {
         target.isContentEditable;
 
       const keyMap = useShortcutStore.getState().keyMap;
-      const { singleKey, twoKeySequences, ctrlCombos } = getCachedReverseMap(keyMap);
+      const { singleKey, twoKeyByPrefix, ctrlCombos } = getCachedReverseMap(keyMap);
 
       // Ctrl/Cmd shortcuts work everywhere
       if (e.ctrlKey || e.metaKey) {
@@ -142,14 +150,15 @@ export function useKeyboardShortcuts() {
 
       const key = e.key;
 
-      // Handle two-key sequences (pending "g" key)
-      if (pendingKeyRef.current === "g") {
+      // Handle two-key sequences (pending prefix: g, n, …)
+      if (pendingKeyRef.current) {
+        const prefix = pendingKeyRef.current;
         pendingKeyRef.current = null;
         if (pendingTimerRef.current) {
           clearTimeout(pendingTimerRef.current);
           pendingTimerRef.current = null;
         }
-        const actionId = twoKeySequences.get(key);
+        const actionId = twoKeyByPrefix.get(prefix)?.get(key);
         if (actionId) {
           e.preventDefault();
           executeAction(actionId);
@@ -157,9 +166,9 @@ export function useKeyboardShortcuts() {
         }
       }
 
-      // Check if "g" starts a two-key sequence
-      if (key === "g" && twoKeySequences.size > 0) {
-        pendingKeyRef.current = "g";
+      // Start a two-key sequence when the key is a known prefix
+      if (twoKeyByPrefix.has(key)) {
+        pendingKeyRef.current = key;
         pendingTimerRef.current = setTimeout(() => {
           pendingKeyRef.current = null;
         }, 1000);
@@ -493,6 +502,30 @@ async function executeAction(actionId: string): Promise<void> {
       const moveThreadIds = multiMoveIds.size > 0 ? [...multiMoveIds] : selectedId ? [selectedId] : [];
       if (moveThreadIds.length > 0) {
         window.dispatchEvent(new CustomEvent("velo-move-to-folder", { detail: { threadIds: moveThreadIds } }));
+      }
+      break;
+    }
+    case "mark.interesting":
+    case "mark.noise":
+    case "mark.alwaysReads":
+    case "mark.stop": {
+      if (!selectedId || !activeAccountId) break;
+      const mark =
+        actionId === "mark.interesting" ? "interesting"
+        : actionId === "mark.noise" ? "noise"
+        : actionId === "mark.alwaysReads" ? "always_reads"
+        : "stop";
+      try {
+        const result = await applyNewsletterMark(
+          accountIdForThread(selectedId, activeAccountId)!,
+          selectedId,
+          mark,
+        );
+        window.dispatchEvent(
+          new CustomEvent("velo-newsletter-mark-done", { detail: result }),
+        );
+      } catch (err) {
+        console.error("Newsletter mark failed:", err);
       }
       break;
     }

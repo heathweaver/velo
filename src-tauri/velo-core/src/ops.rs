@@ -82,10 +82,14 @@ pub async fn imap_list_folders(config: ImapConfig, priority: Priority) -> Result
     Ok(folders)
 }
 
+/// Fetch messages by UID. `headers_only` asks for the header block alone —
+/// what a sync pass needs to list and thread mail — leaving bodies to be
+/// fetched when a thread is opened.
 pub async fn imap_fetch_messages(
     config: ImapConfig,
     folder: String,
     uids: Vec<u32>,
+    headers_only: bool,
     priority: Priority,
 ) -> Result<ImapFetchResult, String> {
     if uids.is_empty() {
@@ -99,14 +103,14 @@ pub async fn imap_fetch_messages(
         .join(",");
 
     let (mut session, turn) = checkout(&config, priority).await?;
-    let result = imap_client::fetch_messages(&mut session, &folder, &uid_set).await;
+    let result = imap_client::fetch_messages(&mut session, &folder, &uid_set, headers_only).await;
     checkin(&config, session, turn).await;
 
     match result {
         Ok(r) => Ok(r),
         Err(e) if e.starts_with("ASYNC_IMAP_EMPTY:") => {
             log::info!("Falling back to raw TCP fetch for folder {folder}");
-            imap_client::raw_fetch_messages(&config, &folder, &uid_set).await
+            imap_client::raw_fetch_messages(&config, &folder, &uid_set, headers_only).await
         }
         Err(e) => Err(e),
     }

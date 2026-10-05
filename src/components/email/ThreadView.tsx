@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
+import { ensureMessageBodies } from "@/services/email/messageBodies";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useMarkReadWhenRead } from "@/hooks/useMarkReadWhenRead";
@@ -92,11 +93,29 @@ export function ThreadView({ thread }: ThreadViewProps) {
   // Load messages
   useEffect(() => {
     if (!threadAccountId) return;
+    // Moving to another thread while this one's bodies are still downloading
+    // must not let the late result overwrite the new thread's messages.
+    let cancelled = false;
     setLoading(true);
     getMessagesForThread(threadAccountId, thread.id)
-      .then(setMessages)
+      .then((msgs) => {
+        if (cancelled) return;
+        // Show headers straight from disk; the spinner is only for the local
+        // read, never for the network.
+        setMessages(msgs);
+        setLoading(false);
+        // Metadata-first sync leaves bodies empty until open — fill on demand.
+        return ensureMessageBodies(threadAccountId, msgs).then((withBodies) => {
+          if (!cancelled && withBodies !== msgs) setMessages(withBodies);
+        });
+      })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [threadAccountId, thread.id]);
 
   // Check per-sender allowlist (single batch query instead of N queries)

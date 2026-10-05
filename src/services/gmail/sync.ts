@@ -1,7 +1,7 @@
 import { GmailClient } from "./client";
 import { parseGmailMessage, type ParsedMessage } from "./messageParser";
 import { upsertLabel } from "../db/labels";
-import { upsertThread, setThreadLabels } from "../db/threads";
+import { upsertThread, setThreadLabels, deleteThread } from "../db/threads";
 import { withTransaction } from "../db/connection";
 import { upsertMessage } from "../db/messages";
 import { upsertAttachment } from "../db/attachments";
@@ -27,6 +27,19 @@ export interface SyncProgress {
 }
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
+
+/**
+ * Gmail thread fetch during bulk sync — metadata only; bodies load on open
+ * (ensureMessageBodies). `format=full` for every thread of the mailbox was the
+ * dominant cost of an initial sync.
+ */
+const SYNC_THREAD_FORMAT = "metadata" as const;
+
+/** A Gmail API error for a resource that no longer exists. */
+function isNotFoundError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /Gmail API error: 404\b/.test(msg);
+}
 
 /**
  * Store a fetched thread's data (messages, labels, attachments) into the local DB.
@@ -256,7 +269,7 @@ export async function initialSync(
       });
 
       try {
-        const thread = await client.getThread(stub.id, "full");
+        const thread = await client.getThread(stub.id, SYNC_THREAD_FORMAT);
 
         if (BigInt(thread.historyId) > BigInt(historyId)) {
           historyId = thread.historyId;
@@ -320,14 +333,24 @@ async function parallelLimit<T>(
 /**
  * Delta sync: fetch only changes since last sync using history API.
  */
+/**
+ * Returns how many threads changed, so the caller can skip a UI refresh when a
+ * poll found nothing — every 30 s per account, that refresh was a full reload
+ * of the visible list.
+ */
 export async function deltaSync(
   client: GmailClient,
   accountId: string,
   lastHistoryId: string,
-): Promise<void> {
+): Promise<number> {
   try {
     // Paginate through all history pages
     const affectedThreadIds = new Set<string>();
+    // Threads that gained a message. Only these need bodies now: filters,
+    // notifications and the newsletter skim read them, and fresh mail is what
+    // gets opened next. Label-only changes (read, archive, star — most of the
+    // history stream) are fully described by metadata.
+    const threadsWithNewMessages = new Set<string>();
     const newInboxMessageIds = new Set<string>();
     let latestHistoryId = lastHistoryId;
     let pageToken: string | undefined;
@@ -341,6 +364,7 @@ export async function deltaSync(
           if (item.messagesAdded) {
             for (const added of item.messagesAdded) {
               affectedThreadIds.add(added.message.threadId);
+              threadsWithNewMessages.add(added.message.threadId);
               // Track new unread inbox messages for notifications
               const labels = added.message.labelIds ?? [];
               if (labels.includes("INBOX") && labels.includes("UNREAD")) {
@@ -371,7 +395,7 @@ export async function deltaSync(
 
     if (affectedThreadIds.size === 0) {
       await updateAccountSyncState(accountId, latestHistoryId);
-      return;
+      return 0;
     }
 
     // Load settings once for the whole sync cycle
@@ -383,8 +407,10 @@ export async function deltaSync(
     );
     const vipSenders = smartNotifications ? await getVipSenders(accountId) : new Set<string>();
 
-    // Re-fetch affected threads in parallel (max 5 concurrent)
+    // Re-fetch affected threads in parallel (10 concurrent fetches; the
+    // stores queue behind the write mutex).
     const threadIds = [...affectedThreadIds];
+    let storeFailures = 0;
     await parallelLimit(
       threadIds.map((threadId) => async () => {
         try {
@@ -395,12 +421,31 @@ export async function deltaSync(
             return;
           }
 
-          const thread = await client.getThread(threadId, "full");
+          let thread;
+          try {
+            thread = await client.getThread(
+              threadId,
+              threadsWithNewMessages.has(threadId) ? "full" : SYNC_THREAD_FORMAT,
+            );
+          } catch (fetchErr) {
+            // The thread is gone on the server (deleted forever, or every
+            // message in it was). Not a failure to retry — retrying a 404
+            // would pin history_id below this point for good.
+            if (isNotFoundError(fetchErr)) {
+              await withTransaction(async () => {
+                await deleteThread(accountId, threadId);
+              });
+              return;
+            }
+            throw fetchErr;
+          }
 
           if (!thread.messages || thread.messages.length === 0) return;
 
           const parsedMessages = thread.messages.map(parseGmailMessage);
-          await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          await withTransaction(async () => {
+            await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          });
 
           // Auto-archive muted threads that reappear in INBOX
           if (mutedThreadIds.has(threadId)) {
@@ -450,18 +495,30 @@ export async function deltaSync(
               .catch((err) => console.error("Smart label error:", err));
           }
         } catch (err) {
+          storeFailures++;
           console.error(`Failed to re-sync thread ${threadId}:`, err);
         }
       }),
       10,
     );
 
-    await updateAccountSyncState(accountId, latestHistoryId);
+    // Only advance history when every affected thread landed. Advancing past
+    // a failure ("database is locked", a dropped request) meant the next delta
+    // started beyond it and the thread was never fetched again.
+    if (storeFailures === 0) {
+      await updateAccountSyncState(accountId, latestHistoryId);
+    } else {
+      console.warn(
+        `[deltaSync] ${storeFailures} thread(s) failed to store — NOT advancing history_id so they are retried next sync`,
+      );
+    }
 
     // Fire-and-forget AI categorization for new threads
     import("@/services/ai/categorizationManager")
       .then(({ categorizeNewThreads }) => categorizeNewThreads(accountId))
       .catch((err) => console.error("Categorization error:", err));
+
+    return affectedThreadIds.size;
   } catch (err) {
     // historyId might be too old — need full re-sync
     const message = err instanceof Error ? err.message : String(err);

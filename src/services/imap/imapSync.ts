@@ -60,7 +60,16 @@ const CIRCUIT_BREAKER_DELAY_MS = 15_000;
 /** After this many consecutive failures, skip remaining folders entirely. */
 const CIRCUIT_BREAKER_MAX_FAILURES = 5;
 /** Delay (ms) between folder syncs during initial sync to avoid connection bursts. */
-const INTER_FOLDER_DELAY_MS = 1_000;
+const INTER_FOLDER_DELAY_MS = 200; // was 1000; STATUS/IDLE still deferred
+
+/**
+ * A delta pass that finds at most this many new messages in a folder fetches
+ * them whole: it is fresh mail, likely to be opened next, and filters and the
+ * newsletter skim want the body. Anything larger is a backlog (a resumed
+ * folder, a first poll after days offline) and is fetched headers-only like an
+ * initial sync, with bodies loaded on open.
+ */
+export const DELTA_FULL_BODY_MAX = 25;
 
 export function isConnectionError(err: unknown): boolean {
   const msg = String(err).toLowerCase();
@@ -159,6 +168,8 @@ export function imapMessageToParsedMessage(
     msg.is_draft,
   );
 
+  // Headers-only fetches carry neither snippet nor body; "" here is "unknown",
+  // and the stores keep any snippet already on disk rather than blanking it.
   const snippet = msg.snippet ?? (msg.body_text ? msg.body_text.slice(0, 200) : "");
 
   const attachments: ParsedAttachment[] = msg.attachments.map((att) => ({
@@ -189,7 +200,7 @@ export function imapMessageToParsedMessage(
     rawSize: msg.raw_size,
     internalDate: msg.date * 1000,
     labelIds,
-    hasAttachments: attachments.length > 0,
+    hasAttachments: attachments.length > 0 || msg.has_attachments_hint === true,
     attachments,
     listUnsubscribe: msg.list_unsubscribe,
     listUnsubscribePost: msg.list_unsubscribe_post,
@@ -575,14 +586,20 @@ async function fetchAndStoreUids(
   allMeta: Map<string, MessageMeta>,
   allThreadable: ThreadableMessage[],
   labelsByRfcId: Map<string, Set<string>>,
+  headersOnly: boolean,
 ): Promise<{ lastUid: number; uidvalidity: number; stored: number }> {
   let lastUid = 0;
   let uidvalidity = 0;
   let stored = 0;
 
-  for (let i = 0; i < uids.length; i += BATCH_SIZE) {
-    const batch = uids.slice(i, i + BATCH_SIZE);
-    const result = await imapFetchMessages(config, folderPath, batch, "background");
+  // Ascending, so that a batch failing part-way leaves lastUid at the end of a
+  // contiguous run rather than past a hole. (The throw below means the caller
+  // records nothing for this folder anyway, but the order costs nothing.)
+  const sorted = [...uids].sort((a, b) => a - b);
+
+  for (let i = 0; i < sorted.length; i += BATCH_SIZE) {
+    const batch = sorted.slice(i, i + BATCH_SIZE);
+    const result = await imapFetchMessages(config, folderPath, batch, "background", headersOnly);
     uidvalidity = result.folder_status.uidvalidity;
 
     const chunkParsed: { parsed: ParsedMessage; msg: ImapMessage; threadable: ThreadableMessage }[] = [];
@@ -691,7 +708,9 @@ export async function imapInitialSync(
       // Phase 2a: Lightweight search — get UIDs only (no message bodies over IPC)
       const sinceDate = computeSinceDate(daysBack);
       const searchResult = await imapSearchFolder(config, folder.raw_path, sinceDate, "background");
-      const uidsToFetch = searchResult.uids;
+      // Ascending, so the watermark recorded below only ever covers a
+      // contiguous prefix of what was asked for.
+      const uidsToFetch = [...searchResult.uids].sort((a, b) => a - b);
 
       // Reset circuit breaker on success
       consecutiveFailures = 0;
@@ -724,26 +743,36 @@ export async function imapInitialSync(
       let lastUid = 0;
       const uidvalidity = searchResult.folder_status.uidvalidity;
 
-      // Phase 2b: Fetch messages in small IPC-friendly chunks
+      // Phase 2b: Fetch messages in small IPC-friendly chunks — headers only.
+      // Initial sync is the bulk path: downloading every body of every folder
+      // before the inbox was usable was the single largest cost of a first
+      // sync. Bodies arrive when a thread is opened (ensureMessageBodies).
+      //
+      // A chunk that fails stops the folder rather than being skipped. Skipping
+      // it still raised lastUid past the hole, and delta sync only ever asks for
+      // UIDs above lastUid — so the skipped mail was never fetched, ever.
+      let folderHadChunkFailure = false;
       for (let chunkStart = 0; chunkStart < uidsToFetch.length; chunkStart += CHUNK_SIZE) {
         const chunkUids = uidsToFetch.slice(chunkStart, chunkStart + CHUNK_SIZE);
         let chunkResult;
         try {
-          chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, "background");
+          chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, "background", true);
         } catch (chunkErr) {
           // Retry once for transient connection errors
           if (isConnectionError(chunkErr)) {
             console.warn(`[imapSync] Chunk fetch failed in ${folder.path}, retrying in 2s:`, chunkErr);
             await delay(2_000);
             try {
-              chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, "background");
+              chunkResult = await imapFetchMessages(config, folder.raw_path, chunkUids, "background", true);
             } catch (retryErr) {
               console.error(`[imapSync] Chunk retry failed in ${folder.path}:`, retryErr);
-              continue;
+              folderHadChunkFailure = true;
+              break;
             }
           } else {
             console.error(`[imapSync] Failed to fetch chunk ${chunkStart}-${chunkStart + chunkUids.length} in ${folder.path}:`, chunkErr);
-            continue;
+            folderHadChunkFailure = true;
+            break;
           }
         }
 
@@ -795,10 +824,20 @@ export async function imapInitialSync(
       }
 
       console.log(
-        `[imapSync] Folder ${folder.path}: ${uidsToFetch.length} UIDs, ${folderFetchedCount} fetched, ${folderStoredCount} after date filter`,
+        `[imapSync] Folder ${folder.path}: ${uidsToFetch.length} UIDs, ${folderFetchedCount} fetched, ${folderStoredCount} after date filter` +
+          (folderHadChunkFailure ? " (stopped at a failed chunk)" : ""),
       );
 
-      // Update folder sync state
+      if (folderHadChunkFailure && lastUid === 0) {
+        // Nothing landed. Recording last_uid = 0 would make delta sync fetch
+        // every UID in the folder with no date window; leaving it unrecorded
+        // makes delta treat it as a new folder and search it properly.
+        folderErrors.push(`${folder.path}: first chunk failed`);
+        continue;
+      }
+
+      // Update folder sync state. With a failed chunk this is the end of the
+      // contiguous prefix that did land, so delta sync resumes from there.
       await upsertFolderSyncState({
         account_id: accountId,
         folder_path: folder.raw_path,
@@ -954,6 +993,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
         continue;
       }
 
+      // A new (or rescanned) folder is a bulk walk: headers only.
       const { lastUid, stored } = await fetchAndStoreUids(
         accountId,
         config,
@@ -963,6 +1003,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
         allMeta,
         allThreadable,
         labelsByRfcId,
+        true,
       );
       storedCount += stored;
 
@@ -1077,6 +1118,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
             allMeta,
             allThreadable,
             labelsByRfcId,
+            true,
           );
           storedCount += stored;
 
@@ -1104,6 +1146,7 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
           allMeta,
           allThreadable,
           labelsByRfcId,
+          deltaResult.new_uids.length > DELTA_FULL_BODY_MAX,
         );
         storedCount += stored;
 

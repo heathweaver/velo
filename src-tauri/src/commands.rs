@@ -29,9 +29,17 @@ pub async fn imap_fetch_messages(
     config: ImapConfig,
     folder: String,
     uids: Vec<u32>,
+    headers_only: Option<bool>,
     priority: Option<String>,
 ) -> Result<ImapFetchResult, String> {
-    ops::imap_fetch_messages(config, folder, uids, Priority::from_label(priority.as_deref())).await
+    ops::imap_fetch_messages(
+        config,
+        folder,
+        uids,
+        headers_only.unwrap_or(false),
+        Priority::from_label(priority.as_deref()),
+    )
+    .await
 }
 
 #[tauri::command]

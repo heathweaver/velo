@@ -459,9 +459,12 @@ export default function App() {
   // Listen for sync status updates
   const backfillDoneRef = useRef(false);
   useEffect(() => {
-    const unsub = onSyncStatus((accountId, status, _progress, error) => {
+    const unsub = onSyncStatus((accountId, status, _progress, error, info) => {
       if (status === "syncing") {
       } else if (status === "done") {
+        // A poll that found nothing must not reload the list: every listener
+        // of velo-sync-done re-queries the visible threads and their metadata.
+        if (info?.changed === false) return;
         window.dispatchEvent(new Event("velo-sync-done"));
         updateBadgeCount();
 

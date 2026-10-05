@@ -8,10 +8,36 @@ import {
 } from "./smartFolderQuery";
 import { getThreadLabelIds, getThreadById } from "@/services/db/threads";
 
-vi.mock("@/services/db/threads", () => ({
-  getThreadLabelIds: vi.fn(),
-  getThreadById: vi.fn(),
-}));
+vi.mock("@/services/db/threads", () => {
+  // mapSmartFolderRows uses the batch lookups; they are built on the per-thread
+  // mocks below so each test can keep stubbing one thread's answer.
+  const getThreadLabelIds = vi.fn();
+  const getThreadById = vi.fn();
+  const threadKey = (a: string, t: string) => `${a}\u0000${t}`;
+  type Ref = { accountId: string; threadId: string };
+  return {
+    getThreadLabelIds,
+    getThreadById,
+    threadKey,
+    getThreadLabelIdsBatch: async (refs: Ref[]) =>
+      new Map(
+        await Promise.all(
+          refs.map(async (r) => [
+            threadKey(r.accountId, r.threadId),
+            (await getThreadLabelIds(r.accountId, r.threadId)) ?? [],
+          ] as const),
+        ),
+      ),
+    getThreadsByRefs: async (refs: Ref[]) => {
+      const out = new Map();
+      for (const r of refs) {
+        const t = await getThreadById(r.accountId, r.threadId);
+        if (t) out.set(threadKey(r.accountId, r.threadId), t);
+      }
+      return out;
+    },
+  };
+});
 
 const mockGetThreadLabelIds = vi.mocked(getThreadLabelIds);
 const mockGetThreadById = vi.mocked(getThreadById);
@@ -249,7 +275,7 @@ describe("mapSmartFolderRows", () => {
     expect(result[1]!.id).toBe("thread-2");
   });
 
-  it("includes label IDs from getThreadLabelIds", async () => {
+  it("includes label IDs from the batched label lookup", async () => {
     mockGetThreadLabelIds.mockResolvedValue(["INBOX", "Label_1"]);
 
     const result = await mapSmartFolderRows([makeRow()]);

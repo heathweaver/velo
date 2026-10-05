@@ -77,17 +77,18 @@ pub struct StoredMessage {
 const UPSERT_THREAD: &str = "INSERT INTO threads (id, account_id, subject, snippet, last_message_at, message_count, is_read, is_starred, is_important, has_attachments)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT(account_id, id) DO UPDATE SET
-       subject = $3, snippet = $4, last_message_at = $5, message_count = $6,
+       subject = $3, snippet = COALESCE(NULLIF($4, ''), snippet), last_message_at = $5, message_count = $6,
        is_read = $7, is_starred = $8, is_important = $9, has_attachments = $10";
 
 /// Deliberately identical to the statement the frontend used to issue, down to
 /// the COALESCE guards: a re-fetch that arrives without a body must not blank
-/// the body already stored.
+/// the body already stored. The same goes for the snippet — a headers-only
+/// sync pass sends an empty one, which means "unknown", not "empty".
 const UPSERT_MESSAGE: &str = "INSERT INTO messages (id, account_id, thread_id, from_address, from_name, to_addresses, cc_addresses, bcc_addresses, reply_to, subject, snippet, date, is_read, is_starred, body_html, body_text, body_cached, raw_size, internal_date, list_unsubscribe, list_unsubscribe_post, auth_results, message_id_header, references_header, in_reply_to_header, imap_uid, imap_folder)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
      ON CONFLICT(account_id, id) DO UPDATE SET
        from_address = $4, from_name = $5, to_addresses = $6, cc_addresses = $7,
-       bcc_addresses = $8, reply_to = $9, subject = $10, snippet = $11,
+       bcc_addresses = $8, reply_to = $9, subject = $10, snippet = COALESCE(NULLIF($11, ''), snippet),
        date = $12, is_read = $13, is_starred = $14,
        body_html = COALESCE($15, body_html), body_text = COALESCE($16, body_text),
        body_cached = CASE WHEN $15 IS NOT NULL THEN 1 ELSE body_cached END,
@@ -359,6 +360,33 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(body.as_deref(), Some("<p>Body</p>"));
+    }
+
+    #[tokio::test]
+    async fn a_headers_only_refetch_keeps_the_stored_snippet() {
+        // Headers-only sync sends an empty snippet: "unknown", not "empty".
+        let pool = pool().await;
+        store_chunk(&pool, &[message("m1")]).await.unwrap();
+
+        let mut headers_only = message("m1");
+        headers_only.body_html = None;
+        headers_only.body_text = None;
+        headers_only.snippet = Some(String::new());
+        store_chunk(&pool, &[headers_only]).await.unwrap();
+
+        let msg_snippet: Option<String> =
+            sqlx::query_scalar("SELECT snippet FROM messages WHERE id = 'm1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(msg_snippet.as_deref(), Some("Snippet"));
+
+        let thread_snippet: Option<String> =
+            sqlx::query_scalar("SELECT snippet FROM threads WHERE id = 'm1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(thread_snippet.as_deref(), Some("Snippet"));
     }
 
     #[tokio::test]
