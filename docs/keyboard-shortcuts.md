@@ -49,6 +49,15 @@ Velo is designed to be used entirely from the keyboard. All shortcuts are custom
 | `↓` (Arrow Down) | Next message in thread |
 | `↑` (Arrow Up) | Previous message in thread |
 
+## Newsletter marks
+
+| Key | Action |
+|-----|--------|
+| `n` then `i` | Mark Interesting (boost sender) |
+| `n` then `o` | Mark Noise (demote / archive rule) |
+| `n` then `r` | Always file as Reads |
+| `n` then `x` | Stop auto-treat for sender |
+
 ## App
 
 | Key | Action |
@@ -69,7 +78,7 @@ Velo is designed to be used entirely from the keyboard. All shortcuts are custom
 
 Velo supports Vim-style two-key sequences. Press the first key, then the second within 1 second:
 
-- `g` is the only prefix key currently
+- Prefix keys: `g` (go to), `n` (newsletter marks)
 - If the second key isn't pressed in time, the sequence resets
 
 ## Customization

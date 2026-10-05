@@ -70,6 +70,7 @@ impl AppState {
         control_migrate(&mut conn).await;
         crate::profile::migrate(&mut conn).await;
         crate::notifier::migrate(&mut conn).await;
+        crate::filer::migrate(&mut conn).await;
 
         let state = AppState {
             control: Arc::new(Mutex::new(conn)),

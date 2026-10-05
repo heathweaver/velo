@@ -47,6 +47,12 @@ export const SHORTCUTS: ShortcutCategory[] = [
     { id: "action.selectAll", keys: "Ctrl+A", desc: "Select all" },
     { id: "action.selectFromHere", keys: "Ctrl+Shift+A", desc: "Select all from here" },
   ]},
+  { category: "Marks", items: [
+    { id: "mark.interesting", keys: "n then i", desc: "Mark Interesting (boost sender)" },
+    { id: "mark.noise", keys: "n then o", desc: "Mark Noise (demote / archive rule)" },
+    { id: "mark.alwaysReads", keys: "n then r", desc: "Always file as Reads" },
+    { id: "mark.stop", keys: "n then x", desc: "Stop auto-treat for sender" },
+  ]},
   { category: "App", items: [
     { id: "app.commandPalette", keys: "/", desc: "Command palette" },
     { id: "app.toggleSidebar", keys: "Ctrl+Shift+E", desc: "Toggle sidebar" },

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { ActionBar } from "./ActionBar";
 import { getMessagesForThread, type DbMessage } from "@/services/db/messages";
+import { ensureMessageBodies } from "@/services/email/messageBodies";
 import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useMarkReadWhenRead } from "@/hooks/useMarkReadWhenRead";
@@ -94,7 +95,12 @@ export function ThreadView({ thread }: ThreadViewProps) {
     if (!threadAccountId) return;
     setLoading(true);
     getMessagesForThread(threadAccountId, thread.id)
-      .then(setMessages)
+      .then(async (msgs) => {
+        setMessages(msgs);
+        // Metadata-first sync leaves bodies empty until open — fill on demand.
+        const withBodies = await ensureMessageBodies(threadAccountId, msgs);
+        setMessages(withBodies);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [threadAccountId, thread.id]);

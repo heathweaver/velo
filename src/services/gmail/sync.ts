@@ -28,6 +28,9 @@ export interface SyncProgress {
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
+/** Gmail thread fetch during sync — metadata only; bodies load on open. */
+const SYNC_THREAD_FORMAT = "metadata" as const;
+
 /**
  * Store a fetched thread's data (messages, labels, attachments) into the local DB.
  * Optionally pass autoArchiveCategories and client to enable auto-archiving.
@@ -256,7 +259,7 @@ export async function initialSync(
       });
 
       try {
-        const thread = await client.getThread(stub.id, "full");
+        const thread = await client.getThread(stub.id, SYNC_THREAD_FORMAT);
 
         if (BigInt(thread.historyId) > BigInt(historyId)) {
           historyId = thread.historyId;
@@ -395,12 +398,14 @@ export async function deltaSync(
             return;
           }
 
-          const thread = await client.getThread(threadId, "full");
+          const thread = await client.getThread(threadId, SYNC_THREAD_FORMAT);
 
           if (!thread.messages || thread.messages.length === 0) return;
 
           const parsedMessages = thread.messages.map(parseGmailMessage);
-          await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          await withTransaction(async () => {
+            await processAndStoreThread(thread, accountId, parsedMessages, client, autoArchiveCategories);
+          });
 
           // Auto-archive muted threads that reappear in INBOX
           if (mutedThreadIds.has(threadId)) {

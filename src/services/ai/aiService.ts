@@ -3,6 +3,8 @@ import { getEnabledCategories } from "@/stores/categoryStore";
 import { getAiCache, setAiCache } from "@/services/db/aiCache";
 import { AiError } from "./errors";
 import type { DbMessage } from "@/services/db/messages";
+import type { NewsletterSkimInput, NewsletterSkimResult } from "@/services/newsletterMarks/types";
+import { skimNewsletterHeuristic } from "@/services/newsletterMarks/skim";
 import {
   SUMMARIZE_PROMPT,
   COMPOSE_PROMPT,
@@ -249,4 +251,17 @@ export async function testConnection(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Skim a newsletter for interesting bits.
+ *
+ * MVP uses the heuristic stub so agents/MCP can call a stable interface.
+ * TODO(llm): call the active AI provider with a skim prompt and parse JSON
+ * highlights when sync performance no longer starves the UI.
+ */
+export async function skimNewsletter(
+  input: NewsletterSkimInput,
+): Promise<NewsletterSkimResult> {
+  return skimNewsletterHeuristic(input);
 }

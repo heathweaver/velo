@@ -846,6 +846,29 @@ const MIGRATIONS = [
       "accounts re-sync once.",
     sql: `ALTER TABLE accounts ADD COLUMN sync_window_days INTEGER;`,
   },
+  {
+    version: 29,
+    description:
+      "Newsletter sender preferences for easy marks (Interesting / Noise / " +
+      "Always Reads / Stop). preference_score boosts or demotes digests; " +
+      "always_reads and stopped drive filter behaviour; filter_rule_id links " +
+      "to the filter_rules row marks create or update.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS newsletter_sender_prefs (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        sender_email TEXT NOT NULL,
+        preference_score REAL NOT NULL DEFAULT 0,
+        always_reads INTEGER NOT NULL DEFAULT 0,
+        stopped INTEGER NOT NULL DEFAULT 0,
+        filter_rule_id TEXT,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+        UNIQUE(account_id, sender_email)
+      );
+      CREATE INDEX IF NOT EXISTS idx_newsletter_prefs_account
+        ON newsletter_sender_prefs(account_id);
+    `,
+  },
 ];
 
 /**

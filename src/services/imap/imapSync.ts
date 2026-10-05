@@ -60,7 +60,7 @@ const CIRCUIT_BREAKER_DELAY_MS = 15_000;
 /** After this many consecutive failures, skip remaining folders entirely. */
 const CIRCUIT_BREAKER_MAX_FAILURES = 5;
 /** Delay (ms) between folder syncs during initial sync to avoid connection bursts. */
-const INTER_FOLDER_DELAY_MS = 1_000;
+const INTER_FOLDER_DELAY_MS = 200; // was 1000; STATUS/IDLE still deferred
 
 export function isConnectionError(err: unknown): boolean {
   const msg = String(err).toLowerCase();
