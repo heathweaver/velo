@@ -65,7 +65,12 @@ export function parseGmailMessage(msg: GmailMessage): ParsedMessage {
     rawSize: msg.sizeEstimate,
     internalDate: parseInt(msg.internalDate, 10),
     labelIds: msg.labelIds,
-    hasAttachments: attachments.length > 0,
+    // `format=metadata` (what sync fetches) has no parts to find attachments
+    // in. A multipart/mixed top level is the usual shape of a message with
+    // one, so take it as the hint until the full message is loaded on open.
+    hasAttachments:
+      attachments.length > 0 ||
+      (!msg.payload.parts && msg.payload.mimeType?.toLowerCase() === "multipart/mixed"),
     attachments,
     listUnsubscribe: getHeader(headers, "List-Unsubscribe"),
     listUnsubscribePost: getHeader(headers, "List-Unsubscribe-Post"),
@@ -102,7 +107,7 @@ function extractBody(
   part: GmailMessagePart,
   mimeType: string,
 ): string | null {
-  if (part.mimeType === mimeType && part.body.data) {
+  if (part.mimeType === mimeType && part.body?.data) {
     return part.body.data;
   }
 
@@ -123,7 +128,7 @@ function extractAttachments(part: GmailMessagePart): ParsedAttachment[] {
 }
 
 function collectAttachments(part: GmailMessagePart, results: ParsedAttachment[]): void {
-  if (part.body.attachmentId) {
+  if (part.body?.attachmentId) {
     const contentIdHeader = part.headers?.find(
       (h) => h.name.toLowerCase() === "content-id",
     );

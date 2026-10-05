@@ -14,6 +14,14 @@ vi.mock("../db/attachments", () => ({
   upsertAttachment: vi.fn(),
 }));
 
+vi.mock("../db/threads", () => ({
+  fillThreadSnippetIfEmpty: vi.fn(),
+}));
+
+vi.mock("../db/connection", () => ({
+  withTransaction: async (fn: (db: unknown) => Promise<void>) => fn({}),
+}));
+
 import { getEmailProvider } from "./providerFactory";
 import { getMessagesForThread, upsertMessage } from "../db/messages";
 import { ensureMessageBodies } from "./messageBodies";
@@ -103,5 +111,70 @@ describe("ensureMessageBodies", () => {
     expect(mockUpsertMessage).toHaveBeenCalledOnce();
     expect(mockGetMessagesForThread).toHaveBeenCalledWith("acct-1", "thread-1");
     expect(result).toEqual(refreshed);
+  });
+
+  it("does not refetch a message already stored with an empty body", async () => {
+    // Fetched once, found to have no text/HTML part, stored as "".
+    const messages = [makeMessage({ body_text: "" })];
+    const result = await ensureMessageBodies("acct-1", messages);
+    expect(result).toBe(messages);
+    expect(mockGetEmailProvider).not.toHaveBeenCalled();
+  });
+
+  it("stores an empty body as fetched so it is not downloaded on every open", async () => {
+    mockGetEmailProvider.mockResolvedValue({
+      fetchMessage: vi.fn().mockResolvedValue({
+        id: "msg-1",
+        fromAddress: "a@example.com",
+        fromName: null,
+        toAddresses: null,
+        ccAddresses: null,
+        bccAddresses: null,
+        replyTo: null,
+        subject: "Only an attachment",
+        snippet: "",
+        date: 1,
+        isRead: true,
+        isStarred: false,
+        bodyHtml: null,
+        bodyText: null,
+        rawSize: 10,
+        internalDate: 1,
+        attachments: [],
+      }),
+    } as never);
+    mockGetMessagesForThread.mockResolvedValue([]);
+
+    await ensureMessageBodies("acct-1", [makeMessage()]);
+
+    expect(mockUpsertMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyHtml: null, bodyText: "" }),
+    );
+  });
+
+  it("shares one download between overlapping calls for the same message", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const fetchMessage = vi.fn().mockImplementation(async () => {
+      await gate;
+      return {
+        id: "msg-1", fromAddress: null, fromName: null, toAddresses: null,
+        ccAddresses: null, bccAddresses: null, replyTo: null, subject: null,
+        snippet: "s", date: 1, isRead: true, isStarred: false,
+        bodyHtml: "<p>x</p>", bodyText: "x", rawSize: 1, internalDate: 1,
+        attachments: [],
+      };
+    });
+    mockGetEmailProvider.mockResolvedValue({ fetchMessage } as never);
+    mockGetMessagesForThread.mockResolvedValue([]);
+
+    const a = ensureMessageBodies("acct-1", [makeMessage()]);
+    const b = ensureMessageBodies("acct-1", [makeMessage()]);
+    // Let both calls reach the provider before the fetch resolves.
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    await Promise.all([a, b]);
+
+    expect(fetchMessage).toHaveBeenCalledTimes(1);
   });
 });

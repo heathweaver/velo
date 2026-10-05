@@ -6,6 +6,7 @@ import { GmailClient } from "./client";
 vi.mock("../db/threads", () => ({
   upsertThread: vi.fn(),
   setThreadLabels: vi.fn(),
+  deleteThread: vi.fn(),
   getMutedThreadIds: vi.fn().mockResolvedValue(new Set()),
 }));
 vi.mock("../db/messages", () => ({
@@ -206,5 +207,71 @@ describe("buildDateQuery", () => {
       new Date(q!.replace("after:", "").replace(/\//g, "-")).getTime();
 
     expect(parse(buildDateQuery(365))).toBeLessThan(parse(buildDateQuery(30)));
+  });
+});
+
+describe("deltaSync watermark and fetch format", () => {
+  const added = (threadId: string) => ({
+    id: "100",
+    messagesAdded: [
+      { message: { id: `msg-${threadId}`, threadId, labelIds: ["INBOX", "UNREAD"] } },
+    ],
+  });
+  const labelled = (threadId: string) => ({
+    id: "101",
+    labelsRemoved: [{ message: { id: `msg-${threadId}`, threadId, labelIds: [] } }],
+  });
+
+  beforeEach(async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    vi.mocked(updateAccountSyncState).mockClear();
+  });
+
+  it("does not advance history_id when a thread fails to store", async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    const client = createMockClient([added("thread-fail")]);
+    vi.mocked(client.getThread).mockRejectedValueOnce(new Error("database is locked"));
+
+    await deltaSync(client, "account-1", "99");
+
+    expect(updateAccountSyncState).not.toHaveBeenCalled();
+  });
+
+  it("advances history_id when every affected thread stores", async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    const client = createMockClient([added("thread-ok")]);
+
+    await deltaSync(client, "account-1", "99");
+
+    expect(updateAccountSyncState).toHaveBeenCalledWith("account-1", "200");
+  });
+
+  it("treats a 404 thread as deleted, not as a failure to retry", async () => {
+    const { updateAccountSyncState } = await import("../db/accounts");
+    const { deleteThread } = await import("../db/threads");
+    const client = createMockClient([labelled("thread-gone")]);
+    vi.mocked(client.getThread).mockRejectedValueOnce(
+      new Error('Gmail API error: 404 {"error":{"code":404}}'),
+    );
+
+    await deltaSync(client, "account-1", "99");
+
+    expect(deleteThread).toHaveBeenCalledWith("account-1", "thread-gone");
+    expect(updateAccountSyncState).toHaveBeenCalledWith("account-1", "200");
+  });
+
+  it("fetches full bodies only for threads that gained a message", async () => {
+    const client = createMockClient([added("thread-new"), labelled("thread-read")]);
+
+    const changed = await deltaSync(client, "account-1", "99");
+
+    expect(changed).toBe(2);
+    expect(client.getThread).toHaveBeenCalledWith("thread-new", "full");
+    expect(client.getThread).toHaveBeenCalledWith("thread-read", "metadata");
+  });
+
+  it("reports no change when history is empty", async () => {
+    const client = createMockClient([]);
+    expect(await deltaSync(client, "account-1", "99")).toBe(0);
   });
 });

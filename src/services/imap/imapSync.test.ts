@@ -80,7 +80,7 @@ vi.mock("../transport", () => ({
   }),
 }));
 
-import { imapMessageToParsedMessage, imapInitialSync, imapDeltaSync, formatImapDate, computeSinceDate, isConnectionError } from "./imapSync";
+import { imapMessageToParsedMessage, imapInitialSync, imapDeltaSync, formatImapDate, computeSinceDate, isConnectionError, DELTA_FULL_BODY_MAX } from "./imapSync";
 import {
   createMockImapMessage,
   createMockImapAccount,
@@ -495,6 +495,8 @@ describe("imapInitialSync", () => {
       "INBOX",
       [1], // UIDs from search
       "background",
+      // Initial sync fetches headers only; bodies load when a thread opens.
+      true,
     );
   });
 
@@ -508,48 +510,57 @@ describe("imapInitialSync", () => {
     expect(mockWithTransaction).toHaveBeenCalledTimes(2);
   });
 
-  it("continues to next chunk on fetch error", async () => {
-    const msg1 = createMockImapMessage({ uid: 1, message_id: "<m1@test>", date: Math.floor(Date.now() / 1000) });
-    const msg2 = createMockImapMessage({ uid: 201, message_id: "<m2@test>", date: Math.floor(Date.now() / 1000) });
-
-    const mockFolder = createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: 2 });
-    mockImapListFolders.mockResolvedValue([mockFolder]);
-
-    // Return UIDs in two "chunks" (we'll set CHUNK_SIZE to 200 but have UIDs 1 and 201)
-    mockImapSearchFolder.mockResolvedValue({
-      uids: [1, 201],
-      folder_status: createMockImapFolderStatus({ exists: 2 }),
-    });
-
-    // First chunk fetch succeeds, but because both UIDs are in the same chunk (< 200),
-    // we test error handling by making imapFetchMessages fail on first call and succeed on retry
-    mockImapFetchMessages
-      .mockRejectedValueOnce(new Error("fetch timeout"))
-      .mockResolvedValueOnce(createMockImapFetchResult([msg2]));
-
-    // This won't exercise the multi-chunk path since 2 UIDs < 200 chunk size.
-    // Instead test that a search failure at folder level is handled.
-    // Reset and use a simpler approach: single chunk that fails
-    vi.clearAllMocks();
-    mockGetAccount.mockResolvedValue(createMockImapAccount({ id: "acc-1" }));
-    // clearAllMocks clears calls, not implementations, so a test that stubs
-    // pending ops would otherwise leak "everything is skipped" into the rest.
-    vi.mocked(getResourcesWithPendingOps).mockResolvedValue(new Set());
-
+  it("does not record a watermark for a folder whose only chunk failed", async () => {
     const msgs = Array.from({ length: 2 }, (_, i) =>
       createMockImapMessage({ uid: i + 1, message_id: `<m${i}@test>`, date: Math.floor(Date.now() / 1000) }),
     );
     setupFolderWithMessages("INBOX", msgs);
-
-    // Even if imapFetchMessages fails for one chunk, the folder-level error is caught
     mockImapFetchMessages.mockRejectedValueOnce(new Error("chunk fetch failed"));
+    vi.mocked(upsertFolderSyncState).mockClear();
 
-    const syncPromise = imapInitialSync("acc-1");
+    let caught: Error | null = null;
+    const syncPromise = imapInitialSync("acc-1").catch((err: Error) => {
+      caught = err;
+    });
     await vi.runAllTimersAsync();
-    const result = await syncPromise;
+    await syncPromise;
 
-    // Sync should complete without throwing
-    expect(result.messages).toEqual([]);
+    // The failure surfaces instead of the folder being marked synced with
+    // last_uid 0 — which made delta sync fetch the whole folder unwindowed,
+    // or (before that) skip the failed UIDs for good.
+    expect(caught).not.toBeNull();
+    expect(vi.mocked(upsertFolderSyncState)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ folder_path: "INBOX" }),
+    );
+  });
+
+  it("stops at a failed chunk and records only the contiguous prefix", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    // 250 UIDs → two chunks of 200 + 50. Search returns them out of order.
+    const uids = Array.from({ length: 250 }, (_, i) => i + 1).reverse();
+    const mockFolder = createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: 250 });
+    mockImapListFolders.mockResolvedValue([mockFolder]);
+    mockImapSearchFolder.mockResolvedValue({
+      uids,
+      folder_status: createMockImapFolderStatus({ exists: 250 }),
+    });
+    const firstChunk = Array.from({ length: 200 }, (_, i) =>
+      createMockImapMessage({ uid: i + 1, message_id: `<p${i}@test>`, date: now }),
+    );
+    mockImapFetchMessages
+      .mockResolvedValueOnce(createMockImapFetchResult(firstChunk))
+      .mockRejectedValueOnce(new Error("server said NO"));
+    vi.mocked(upsertFolderSyncState).mockClear();
+
+    await imapInitialSync("acc-1");
+
+    // First chunk is the 200 lowest UIDs, so the watermark is 200 — not 250.
+    expect(mockImapFetchMessages.mock.calls[0]![2]).toEqual(
+      Array.from({ length: 200 }, (_, i) => i + 1),
+    );
+    expect(vi.mocked(upsertFolderSyncState)).toHaveBeenCalledWith(
+      expect.objectContaining({ folder_path: "INBOX", last_uid: 200 }),
+    );
   });
 
   it("circuit breaker skips remaining folders after 5 consecutive connection failures", async () => {
@@ -849,6 +860,28 @@ describe("imapDeltaSync", () => {
     mockImapListFolders.mockReset();
     mockImapDeltaCheck.mockReset();
     mockGetAllFolderSyncStates.mockReset();
+  });
+
+  it("fetches a handful of new messages whole", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    setupDelta([1, 2, 3].map((uid) => createMockImapMessage({ uid, message_id: `<f${uid}@test>`, date: now })));
+
+    await imapDeltaSync("acc-1");
+
+    // Fresh mail: filters and the skim want bodies, and it is opened next.
+    expect(mockImapFetchMessages.mock.calls[0]![4]).toBe(false);
+  });
+
+  it("fetches a backlog of new messages headers-only", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const backlog = Array.from({ length: DELTA_FULL_BODY_MAX + 1 }, (_, i) =>
+      createMockImapMessage({ uid: i + 1, message_id: `<b${i}@test>`, date: now }),
+    );
+    setupDelta(backlog);
+
+    await imapDeltaSync("acc-1");
+
+    expect(mockImapFetchMessages.mock.calls[0]![4]).toBe(true);
   });
 
   it("writes each message as it arrives rather than at the end", async () => {

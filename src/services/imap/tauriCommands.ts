@@ -51,6 +51,12 @@ export interface ImapMessage {
   list_unsubscribe_post: string | null;
   auth_results: string | null;
   attachments: ImapAttachment[];
+  /**
+   * Headers-only fetches download no parts, so `attachments` is empty; this is
+   * true when the top-level Content-Type is multipart/mixed. Absent on older
+   * backends and on web.
+   */
+  has_attachments_hint?: boolean;
 }
 
 export interface ImapAttachment {
@@ -157,14 +163,26 @@ export async function imapListFolders(
 /**
  * Fetch messages from a folder by UID list.
  * Returns parsed messages along with folder status metadata.
+ *
+ * `headersOnly` fetches just each message's header block (plus size and
+ * flags): enough to list and thread mail, a fraction of the bytes. The
+ * returned messages have null bodies, which `ensureMessageBodies` fills in
+ * when the thread is opened.
  */
 export async function imapFetchMessages(
   config: ImapConfig,
   folder: string,
   uids: number[],
-  priority?: ImapPriority
+  priority?: ImapPriority,
+  headersOnly = false,
 ): Promise<ImapFetchResult> {
-  return invoke<ImapFetchResult>('imap_fetch_messages', { config, folder, uids, priority });
+  return invoke<ImapFetchResult>('imap_fetch_messages', {
+    config,
+    folder,
+    uids,
+    priority,
+    ...(headersOnly ? { headersOnly: true } : {}),
+  });
 }
 
 /**

@@ -28,26 +28,57 @@ let syncTimer: ReturnType<typeof setInterval> | null = null;
 let syncPromise: Promise<void> | null = null;
 let pendingAccountIds: string[] | null = null;
 
+export interface SyncDoneInfo {
+  /**
+   * False when the sync ran and found nothing new. Listeners use it to skip
+   * reloading the visible list — a background poll runs every 30 s for every
+   * account, and reloading on each one re-rendered the list for nothing.
+   */
+  changed: boolean;
+}
+
 export type SyncStatusCallback = (
   accountId: string,
   status: "syncing" | "done" | "error",
   progress?: SyncProgress,
   error?: string,
+  info?: SyncDoneInfo,
 ) => void;
 
-let statusCallback: SyncStatusCallback | null = null;
+/**
+ * Every registered listener. This used to be a single slot: App (which turns
+ * "done" into the velo-sync-done refresh) and the sidebar SyncButton both
+ * registered, the later one silently replaced the earlier, and either
+ * unsubscribing cleared the slot for both — after which finished syncs no
+ * longer refreshed the list at all.
+ */
+const statusListeners = new Set<SyncStatusCallback>();
+
+function emitStatus(...args: Parameters<SyncStatusCallback>): void {
+  for (const listener of [...statusListeners]) {
+    try {
+      listener(...args);
+    } catch (err) {
+      console.error("[syncManager] Sync status listener failed:", err);
+    }
+  }
+}
+
+/** Kept as a callable so existing call sites read the same. */
+const statusCallback: SyncStatusCallback = (...args) => emitStatus(...args);
 
 export function onSyncStatus(cb: SyncStatusCallback): () => void {
-  statusCallback = cb;
+  statusListeners.add(cb);
   return () => {
-    statusCallback = null;
+    statusListeners.delete(cb);
   };
 }
 
 /**
  * Run a sync for a single Gmail API account (initial or delta).
+ * Resolves to whether anything may have changed locally.
  */
-async function syncGmailAccount(accountId: string): Promise<void> {
+async function syncGmailAccount(accountId: string): Promise<boolean> {
   const client = await getGmailClient(accountId);
   const account = await getAccount(accountId);
 
@@ -77,16 +108,17 @@ async function syncGmailAccount(accountId: string): Promise<void> {
     await clearAccountHistoryId(accountId);
   }
 
+  let changed = true;
   if (account.history_id && !gmailWindowWidened) {
     // Delta sync
     try {
-      await deltaSync(client, accountId, account.history_id);
+      changed = (await deltaSync(client, accountId, account.history_id)) > 0;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
       if (message === "HISTORY_EXPIRED") {
         // Fallback to full sync
         await initialSync(client, accountId, syncDays, (progress) => {
-          statusCallback?.(accountId, "syncing", progress);
+          statusCallback(accountId, "syncing", progress);
         });
       } else {
         throw err;
@@ -95,7 +127,7 @@ async function syncGmailAccount(accountId: string): Promise<void> {
   } else {
     // First time — full initial sync
     await initialSync(client, accountId, syncDays, (progress) => {
-      statusCallback?.(accountId, "syncing", progress);
+      statusCallback(accountId, "syncing", progress);
     });
   }
 
@@ -103,12 +135,14 @@ async function syncGmailAccount(accountId: string): Promise<void> {
   // widening is detectable. Written after the sync rather than before, so a
   // failed run does not claim coverage it never achieved.
   await setAccountSyncWindow(accountId, syncDays);
+  return changed;
 }
 
 /**
  * Run a sync for a single IMAP account (initial or delta).
+ * Resolves to whether anything may have changed locally.
  */
-async function syncImapAccount(accountId: string): Promise<void> {
+async function syncImapAccount(accountId: string): Promise<boolean> {
   const account = await getAccount(accountId);
 
   if (!account) {
@@ -147,7 +181,8 @@ async function syncImapAccount(accountId: string): Promise<void> {
     // Delta sync streams bodies to disk, so `messages` is always empty and only
     // the count says whether anything arrived. Reading the array here would arm
     // the destructive recovery below on every single sync.
-    if ((result.storedCount ?? result.messages.length) === 0) {
+    const deltaStored = result.storedCount ?? result.messages.length;
+    if (deltaStored === 0) {
       let storedNothing = false;
       try {
         const [threadCount, messageCount] = await Promise.all([
@@ -167,23 +202,26 @@ async function syncImapAccount(accountId: string): Promise<void> {
         await clearAccountHistoryId(accountId);
         await clearAllFolderSyncStates(accountId);
         await imapInitialSync(accountId, syncDays, (progress) => {
-          statusCallback?.(accountId, "syncing", {
+          statusCallback(accountId, "syncing", {
             phase: mapImapPhase(progress.phase),
             current: progress.current,
             total: progress.total,
           });
         });
+        return true;
       }
     }
+    return deltaStored > 0;
   } else {
     // First time — full initial sync
     await imapInitialSync(accountId, syncDays, (progress) => {
-      statusCallback?.(accountId, "syncing", {
+      statusCallback(accountId, "syncing", {
         phase: mapImapPhase(progress.phase),
         current: progress.current,
         total: progress.total,
       });
     });
+    return true;
   }
 }
 
@@ -273,27 +311,25 @@ async function syncAccountInternal(accountId: string): Promise<void> {
       throw new Error("Account not found");
     }
 
-    statusCallback?.(accountId, "syncing");
+    statusCallback(accountId, "syncing");
 
     console.log(`[syncManager] Syncing account ${accountId} (provider=${account.provider}, history_id=${account.history_id ?? "null"})`);
 
     if (account.provider === "caldav") {
       // CalDAV-only accounts — skip email sync, only sync calendar
       await syncCalendarForAccount(accountId);
-      statusCallback?.(accountId, "done");
+      statusCallback(accountId, "done");
       return;
     }
 
-    if (account.provider === "imap") {
-      await syncImapAccount(accountId);
-    } else {
-      await syncGmailAccount(accountId);
-    }
+    const changed =
+      account.provider === "imap"
+        ? await syncImapAccount(accountId)
+        : await syncGmailAccount(accountId);
 
-    // Always emit "done" when an initial sync completes (clears the bar).
-    // Also emit for delta syncs that fell back to initial (recovery re-sync)
-    // since those emit progress via statusCallback inside syncImapAccount.
-    statusCallback?.(accountId, "done");
+    // Always emit "done" (it clears the spinner); `changed` tells listeners
+    // whether there is anything new to reload.
+    statusCallback(accountId, "done", undefined, undefined, { changed });
 
     // Sync calendar alongside email (non-blocking — calendar errors don't affect email sync)
     syncCalendarForAccount(accountId).catch((err) => {
@@ -302,7 +338,7 @@ async function syncAccountInternal(accountId: string): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err ?? "Unknown error");
     console.error(`[syncManager] Sync failed for account ${accountId}:`, message);
-    statusCallback?.(accountId, "error", undefined, message);
+    statusCallback(accountId, "error", undefined, message);
   }
 }
 

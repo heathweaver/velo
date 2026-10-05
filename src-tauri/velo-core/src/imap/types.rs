@@ -49,6 +49,12 @@ pub struct ImapMessage {
     pub list_unsubscribe_post: Option<String>,
     pub auth_results: Option<String>,
     pub attachments: Vec<ImapAttachment>,
+    /// Set by a headers-only fetch, where no parts were downloaded and so
+    /// `attachments` is necessarily empty: true when the top-level
+    /// Content-Type is `multipart/mixed`, the usual shape of a message with
+    /// attachments. Lets the list show a paperclip before the body is loaded.
+    #[serde(default)]
+    pub has_attachments_hint: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

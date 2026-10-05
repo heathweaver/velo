@@ -75,7 +75,7 @@ export async function upsertMessage(msg: {
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
      ON CONFLICT(account_id, id) DO UPDATE SET
        from_address = $4, from_name = $5, to_addresses = $6, cc_addresses = $7,
-       bcc_addresses = $8, reply_to = $9, subject = $10, snippet = $11,
+       bcc_addresses = $8, reply_to = $9, subject = $10, snippet = COALESCE(NULLIF($11, ''), snippet),
        date = $12, is_read = $13, is_starred = $14,
        body_html = COALESCE($15, body_html), body_text = COALESCE($16, body_text),
        body_cached = CASE WHEN $15 IS NOT NULL THEN 1 ELSE body_cached END,

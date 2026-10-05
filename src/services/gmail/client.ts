@@ -366,7 +366,8 @@ export interface GmailMessagePart {
   mimeType: string;
   filename: string;
   headers: GmailHeader[];
-  body: { attachmentId?: string; size: number; data?: string };
+  /** Absent in `format=metadata` responses, which carry headers only. */
+  body?: { attachmentId?: string; size: number; data?: string };
   parts?: GmailMessagePart[];
 }
 

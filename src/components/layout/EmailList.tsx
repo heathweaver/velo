@@ -9,7 +9,7 @@ import { useAccountStore } from "@/stores/accountStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useActiveLabel, useSelectedThreadId, useActiveCategory } from "@/hooks/useRouteNavigation";
 import { navigateToThread, navigateToLabel } from "@/router/navigate";
-import { getThreadsForAccount, getThreadsForCategory, getThreadsByIds, getThreadLabelIds } from "@/services/db/threads";
+import { getThreadsForAccount, getThreadsForCategory, getThreadsByIds, getThreadLabelIdsBatch, threadKey } from "@/services/db/threads";
 import { getCategoriesForThreads, getCategoryUnreadCounts } from "@/services/db/threadCategories";
 import { getActiveFollowUpThreadIds } from "@/services/db/followUpReminders";
 import { getBundleRules, getHeldThreadIds, getBundleSummaries, type DbBundleRule } from "@/services/db/bundleRules";
@@ -241,27 +241,29 @@ export function EmailList({ width, listRef }: { width?: number; listRef?: React.
   }, [filteredThreads, activeLabel, activeCategory, categoryMap, bundledCategorySet, heldThreadIds]);
 
   const mapDbThreads = useCallback(async (dbThreads: Awaited<ReturnType<typeof getThreadsForAccount>>): Promise<Thread[]> => {
-    return Promise.all(
-      dbThreads.map(async (t) => {
-        const labelIds = await getThreadLabelIds(t.account_id, t.id);
-        return {
-          id: t.id,
-          accountId: t.account_id,
-          subject: t.subject,
-          snippet: t.snippet,
-          lastMessageAt: t.last_message_at ?? 0,
-          messageCount: t.message_count,
-          isRead: t.is_read === 1,
-          isStarred: t.is_starred === 1,
-          isPinned: t.is_pinned === 1,
-          isMuted: t.is_muted === 1,
-          hasAttachments: t.has_attachments === 1,
-          labelIds,
-          fromName: t.from_name,
-          fromAddress: t.from_address,
-        };
-      }),
+    // One label query for the page instead of one per row.
+    const labelsByThread = await getThreadLabelIdsBatch(
+      dbThreads.map((t) => ({ accountId: t.account_id, threadId: t.id })),
     );
+    return dbThreads.map((t) => {
+      const labelIds = labelsByThread.get(threadKey(t.account_id, t.id)) ?? [];
+      return {
+        id: t.id,
+        accountId: t.account_id,
+        subject: t.subject,
+        snippet: t.snippet,
+        lastMessageAt: t.last_message_at ?? 0,
+        messageCount: t.message_count,
+        isRead: t.is_read === 1,
+        isStarred: t.is_starred === 1,
+        isPinned: t.is_pinned === 1,
+        isMuted: t.is_muted === 1,
+        hasAttachments: t.has_attachments === 1,
+        labelIds,
+        fromName: t.from_name,
+        fromAddress: t.from_address,
+      };
+    });
   }, []);
 
   const clearSearch = useThreadStore((s) => s.clearSearch);

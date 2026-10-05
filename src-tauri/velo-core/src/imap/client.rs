@@ -243,11 +243,26 @@ pub async fn list_folders(session: &mut ImapSession) -> Result<Vec<ImapFolder>, 
     Ok(folders)
 }
 
+/// FETCH items for a sync pass that only needs to list and thread mail.
+///
+/// `BODY.PEEK[HEADER]` is everything threading, the list and the filters on
+/// sender/subject read; `RFC822.SIZE` keeps the stored size honest without
+/// downloading the message. Bodies are fetched on open (`fetch_message_body`).
+pub const HEADERS_ONLY_FETCH_ITEMS: &str = "UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER]";
+/// FETCH items for a full download, as every sync used to do.
+pub const FULL_FETCH_ITEMS: &str = "UID FLAGS INTERNALDATE BODY.PEEK[]";
+
 /// Fetch messages from a folder by UID range (e.g. "1:100" or "500:*").
+///
+/// With `headers_only`, only the header block of each message crosses the
+/// wire — typically 2–5 KB instead of the whole MIME tree, which for a
+/// newsletter-heavy mailbox is one to two orders of magnitude less data. The
+/// returned messages have no body, snippet or attachment list.
 pub async fn fetch_messages(
     session: &mut ImapSession,
     folder: &str,
     uid_range: &str,
+    headers_only: bool,
 ) -> Result<ImapFetchResult, String> {
     let mailbox = tokio::time::timeout(IMAP_CMD_TIMEOUT, session.select(folder))
         .await
@@ -271,9 +286,10 @@ pub async fn fetch_messages(
 
     // Try UID FETCH first; if the stream is empty, fall back to sequence-number FETCH.
     // Some IMAP servers return empty streams for UID FETCH despite valid UIDs.
+    let fetch_items = if headers_only { HEADERS_ONLY_FETCH_ITEMS } else { FULL_FETCH_ITEMS };
     let fetches = tokio::time::timeout(IMAP_FETCH_TIMEOUT, async {
         let stream = session
-            .uid_fetch(uid_range, "UID FLAGS INTERNALDATE BODY.PEEK[]")
+            .uid_fetch(uid_range, fetch_items)
             .await
             .map_err(|e| format!("UID FETCH {folder} uids={uid_range} failed: {e}"))?;
         Ok::<_, String>(stream.collect::<Vec<_>>().await)
@@ -308,12 +324,17 @@ pub async fn fetch_messages(
             None => { log::warn!("IMAP FETCH {folder}: response missing UID"); continue; }
         };
 
-        let raw = match fetch.body() {
+        let raw = match if headers_only { fetch.header() } else { fetch.body() } {
             Some(b) => b,
             None => { log::warn!("IMAP FETCH {folder}: UID {uid} has no body"); continue; }
         };
 
-        let raw_size = raw.len() as u32;
+        // A header block is not the message: prefer the server's RFC822.SIZE.
+        let raw_size = if headers_only {
+            fetch.size.unwrap_or(raw.len() as u32)
+        } else {
+            raw.len() as u32
+        };
 
         // Parse flags
         let flags: Vec<_> = fetch.flags().collect();
@@ -324,7 +345,12 @@ pub async fn fetch_messages(
         // Extract INTERNALDATE as fallback for messages with unparseable Date headers
         let internal_date = fetch.internal_date().map(|dt| dt.timestamp());
 
-        match parse_message(&parser, raw, uid, folder, raw_size, is_read, is_starred, is_draft, internal_date) {
+        let parsed = if headers_only {
+            parse_message_headers(&parser, raw, uid, folder, raw_size, is_read, is_starred, is_draft, internal_date)
+        } else {
+            parse_message(&parser, raw, uid, folder, raw_size, is_read, is_starred, is_draft, internal_date)
+        };
+        match parsed {
             Ok(msg) => messages.push(msg),
             Err(e) => {
                 log::warn!("Failed to parse message UID {uid}: {e}");
@@ -1101,6 +1127,7 @@ pub async fn raw_fetch_messages(
     config: &ImapConfig,
     folder: &str,
     uid_range: &str,
+    headers_only: bool,
 ) -> Result<ImapFetchResult, String> {
     log::info!("RAW IMAP FETCH: connecting to {}:{} for folder {folder}, UIDs {uid_range}", config.host, config.port);
 
@@ -1162,8 +1189,11 @@ pub async fn raw_fetch_messages(
         highest_modseq: None,
     };
 
-    // UID FETCH with full body
-    let fetch_cmd = format!("a3 UID FETCH {uid_range} (UID FLAGS INTERNALDATE BODY.PEEK[])\r\n");
+    // UID FETCH — header block only during a sync pass, full body otherwise.
+    // RFC822.SIZE is left out here: this parser reads one literal per FETCH
+    // line and is kept to the shape it already handles.
+    let fetch_body = if headers_only { "BODY.PEEK[HEADER]" } else { "BODY.PEEK[]" };
+    let fetch_cmd = format!("a3 UID FETCH {uid_range} (UID FLAGS INTERNALDATE {fetch_body})\r\n");
     reader.get_mut().write_all(fetch_cmd.as_bytes()).await
         .map_err(|e| format!("FETCH write: {e}"))?;
 
@@ -1177,7 +1207,8 @@ pub async fn raw_fetch_messages(
     let mut messages = Vec::new();
 
     for raw_msg in &raw_messages {
-        match parse_message(
+        let parse = if headers_only { parse_message_headers } else { parse_message };
+        match parse(
             &parser,
             &raw_msg.body,
             raw_msg.uid,
@@ -1736,6 +1767,7 @@ fn detect_special_use(name: &async_imap::types::Name) -> Option<String> {
 ///
 /// `internal_date`: optional INTERNALDATE timestamp from the IMAP server,
 /// used as fallback when the Date header cannot be parsed.
+#[allow(clippy::too_many_arguments)]
 fn parse_message(
     parser: &MessageParser,
     raw: &[u8],
@@ -1746,6 +1778,43 @@ fn parse_message(
     is_starred: bool,
     is_draft: bool,
     internal_date: Option<i64>,
+) -> Result<ImapMessage, String> {
+    parse_message_impl(parser, raw, uid, folder, raw_size, is_read, is_starred, is_draft, internal_date, false)
+}
+
+/// Parse a bare header block (`BODY[HEADER]`) into an ImapMessage.
+///
+/// mail-parser happily treats a header block as a message with an empty body
+/// and reports `Some("")` for its text and HTML. Stored as-is, that empty
+/// string would mark the body as cached and the real one would never be
+/// fetched, so body, snippet and attachments are forced to "unknown" here.
+#[allow(clippy::too_many_arguments)]
+fn parse_message_headers(
+    parser: &MessageParser,
+    raw: &[u8],
+    uid: u32,
+    folder: &str,
+    raw_size: u32,
+    is_read: bool,
+    is_starred: bool,
+    is_draft: bool,
+    internal_date: Option<i64>,
+) -> Result<ImapMessage, String> {
+    parse_message_impl(parser, raw, uid, folder, raw_size, is_read, is_starred, is_draft, internal_date, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_message_impl(
+    parser: &MessageParser,
+    raw: &[u8],
+    uid: u32,
+    folder: &str,
+    raw_size: u32,
+    is_read: bool,
+    is_starred: bool,
+    is_draft: bool,
+    internal_date: Option<i64>,
+    headers_only: bool,
 ) -> Result<ImapMessage, String> {
     let message = parser.parse(raw).ok_or("Failed to parse MIME message")?;
 
@@ -1784,9 +1853,15 @@ fn parse_message(
     let bcc_addresses = format_address_list(message.bcc());
     let reply_to = format_address_list(message.reply_to());
 
-    // Body
-    let body_text = message.body_text(0).map(|s| s.to_string());
-    let body_html = message.body_html(0).map(|s| s.to_string());
+    // Body — absent, not empty, when only headers were fetched.
+    let (body_text, body_html) = if headers_only {
+        (None, None)
+    } else {
+        (
+            message.body_text(0).map(|s| s.to_string()),
+            message.body_html(0).map(|s| s.to_string()),
+        )
+    };
 
     // Generate snippet from text body (truncate at char boundary)
     let snippet = body_text.as_ref().map(|text| {
@@ -1803,8 +1878,16 @@ fn parse_message(
         }
     });
 
-    // List-Unsubscribe headers
-    let list_unsubscribe = extract_header_text(message.header(mail_parser::HeaderName::ListUnsubscribe));
+    // List-Unsubscribe headers. mail-parser parses List-Unsubscribe as an
+    // address list (`<https://…>, <mailto:…>`), which extract_header_text does
+    // not read — so IMAP mail never had it, and everything keyed on it (the
+    // newsletter rules, one-click unsubscribe) never saw IMAP newsletters.
+    // Take the raw header value instead, unfolded.
+    let list_unsubscribe = message
+        .header_raw(mail_parser::HeaderName::ListUnsubscribe)
+        .map(unfold_header)
+        .filter(|v| !v.is_empty())
+        .or_else(|| extract_header_text(message.header(mail_parser::HeaderName::ListUnsubscribe)));
     let list_unsubscribe_post = extract_header_text(
         message.header(mail_parser::HeaderName::Other("List-Unsubscribe-Post".into())),
     );
@@ -1827,8 +1910,16 @@ fn parse_message(
         section_map,
     );
 
+    // Headers-only: no parts were downloaded, so the attachment list cannot be
+    // built. A multipart/mixed top level is the usual sign of one.
+    let has_attachments_hint = headers_only
+        && message.content_type().map_or(false, |ct| {
+            ct.ctype().eq_ignore_ascii_case("multipart")
+                && ct.subtype().map_or(false, |st| st.eq_ignore_ascii_case("mixed"))
+        });
+
     // Attachments
-    let attachments: Vec<ImapAttachment> = message
+    let attachments: Vec<ImapAttachment> = if headers_only { Vec::new() } else { message
         .attachments
         .iter()
         .filter_map(|&part_idx| {
@@ -1865,7 +1956,7 @@ fn parse_message(
                 is_inline: att.content_disposition().map_or(false, |cd| cd.is_inline()),
             })
         })
-        .collect();
+        .collect() };
 
     Ok(ImapMessage {
         uid,
@@ -1892,6 +1983,7 @@ fn parse_message(
         list_unsubscribe_post,
         auth_results,
         attachments,
+        has_attachments_hint,
     })
 }
 
@@ -1943,6 +2035,11 @@ fn build_imap_section_map(message: &mail_parser::Message) -> std::collections::H
 }
 
 /// Extract a text value from a HeaderValue, if present.
+/// Collapse a raw (possibly folded) header value onto one line.
+fn unfold_header(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn extract_header_text(hv: Option<&mail_parser::HeaderValue>) -> Option<String> {
     match hv {
         Some(mail_parser::HeaderValue::Text(t)) => Some(t.to_string()),
@@ -1993,5 +2090,71 @@ fn format_address_list(addr: Option<&mail_parser::Address>) -> Option<String> {
         None
     } else {
         Some(parts.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod headers_only_tests {
+    use super::*;
+
+    const HEADER_BLOCK: &[u8] = b"From: Alice <alice@example.com>\r\n\
+To: bob@example.com\r\n\
+Subject: Weekly digest\r\n\
+Message-ID: <abc@example.com>\r\n\
+Date: Mon, 5 Oct 2026 10:00:00 +0000\r\n\
+List-Unsubscribe: <https://example.com/u>\r\n\
+Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
+\r\n";
+
+    #[test]
+    fn header_block_parses_without_inventing_a_body() {
+        let parser = MessageParser::default();
+        let msg = parse_message_headers(&parser, HEADER_BLOCK, 42, "INBOX", 123_456, false, true, false, None)
+            .expect("header block should parse");
+
+        assert_eq!(msg.uid, 42);
+        assert_eq!(msg.subject.as_deref(), Some("Weekly digest"));
+        assert_eq!(msg.from_address.as_deref(), Some("alice@example.com"));
+        assert_eq!(msg.message_id.as_deref(), Some("abc@example.com"));
+        assert_eq!(msg.list_unsubscribe.as_deref(), Some("<https://example.com/u>"));
+        assert_eq!(msg.raw_size, 123_456);
+        assert!(msg.is_starred);
+        // The point of the split: an empty body must read as "not fetched",
+        // or the real one is never loaded.
+        assert!(msg.body_text.is_none());
+        assert!(msg.body_html.is_none());
+        assert!(msg.snippet.is_none());
+        assert!(msg.attachments.is_empty());
+        assert!(msg.has_attachments_hint);
+    }
+
+    #[test]
+    fn folded_list_unsubscribe_is_read_whole() {
+        let parser = MessageParser::default();
+        let raw = b"From: news@example.com\r\nSubject: Issue 9\r\nList-Unsubscribe: <mailto:u@example.com>,\r\n <https://example.com/u?id=1>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\n";
+        let msg = parse_message_headers(&parser, raw, 1, "INBOX", 10, false, false, false, None).unwrap();
+        assert_eq!(
+            msg.list_unsubscribe.as_deref(),
+            Some("<mailto:u@example.com>, <https://example.com/u?id=1>")
+        );
+        assert_eq!(msg.list_unsubscribe_post.as_deref(), Some("List-Unsubscribe=One-Click"));
+    }
+
+    #[test]
+    fn plain_text_header_block_has_no_attachment_hint() {
+        let parser = MessageParser::default();
+        let raw = b"From: a@example.com\r\nSubject: Hi\r\nContent-Type: text/plain\r\n\r\n";
+        let msg = parse_message_headers(&parser, raw, 1, "INBOX", 10, true, false, false, None).unwrap();
+        assert!(msg.body_text.is_none());
+        assert!(!msg.has_attachments_hint);
+    }
+
+    #[test]
+    fn full_parse_still_reads_the_body() {
+        let parser = MessageParser::default();
+        let raw = b"From: a@example.com\r\nSubject: Hi\r\nContent-Type: text/plain\r\n\r\nHello there\r\n";
+        let msg = parse_message(&parser, raw, 1, "INBOX", raw.len() as u32, true, false, false, None).unwrap();
+        assert_eq!(msg.body_text.as_deref().map(str::trim), Some("Hello there"));
+        assert!(!msg.has_attachments_hint);
     }
 }

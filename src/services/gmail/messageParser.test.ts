@@ -51,6 +51,39 @@ describe("parseGmailMessage", () => {
     expect(parsed.hasAttachments).toBe(true);
   });
 
+  it("parses a format=metadata message (headers only, no body field)", () => {
+    // threads.get?format=metadata returns payload headers with no body or
+    // parts. Sync fetches that format, so the parser must not touch body.data.
+    const msg = createMockGmailMessage();
+    const { headers } = msg.payload;
+    msg.payload = {
+      partId: "",
+      mimeType: "multipart/alternative",
+      filename: "",
+      headers,
+    };
+
+    const parsed = parseGmailMessage(msg);
+    expect(parsed.subject).toBe("Test Subject");
+    expect(parsed.snippet).toBe("Hello this is a test");
+    expect(parsed.bodyHtml).toBeNull();
+    expect(parsed.bodyText).toBeNull();
+    expect(parsed.attachments).toEqual([]);
+    expect(parsed.hasAttachments).toBe(false);
+  });
+
+  it("hints at attachments for a metadata-only multipart/mixed message", () => {
+    const msg = createMockGmailMessage();
+    msg.payload = {
+      partId: "",
+      mimeType: "multipart/mixed",
+      filename: "",
+      headers: msg.payload.headers,
+    };
+
+    expect(parseGmailMessage(msg).hasAttachments).toBe(true);
+  });
+
   it("should handle plain email address without name", () => {
     const msg = createMockGmailMessage();
     msg.payload.headers = [
