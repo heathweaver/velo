@@ -9,8 +9,12 @@
 ## Commands
 
 ```bash
-# Start Tauri dev (frontend + backend)
+# Start Tauri dev (frontend + backend, default port 1420)
 npm run tauri dev
+
+# Use a different Vite / Tauri devUrl port
+npm run tauri dev -- --port 1422
+# or: VELO_DEV_PORT=1422 npm run tauri dev
 
 # Vite dev server only (no Tauri)
 npm run dev
