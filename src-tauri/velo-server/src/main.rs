@@ -101,10 +101,11 @@ fn build_app(state: AppState) -> Router {
         ));
 
     // Admin-only API: provisioned mailbox management + profile (display name /
-    // signature, global or per-user).
+    // signature, global or per-user) + Reads filing rules.
     let admin_only = Router::new()
         .nest("/admin", mailboxes::admin_router(state.clone()))
         .nest("/admin", profile::admin_router(state.clone()))
+        .nest("/admin", filer::admin_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_admin,
@@ -583,5 +584,132 @@ mod tests {
             .unwrap();
         let (status, _, _) = send(&app, r).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    fn authed(method: &str, uri: &str, cookie: &str, body: Option<Value>) -> Request<Body> {
+        let b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("cookie", cookie)
+            .header("content-type", "application/json");
+        match body {
+            Some(v) => b.body(Body::from(v.to_string())).unwrap(),
+            None => b.body(Body::empty()).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn filing_rules_crud() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let mb = create_mailbox(&app, &admin, &mark_id, "mark@ex.com").await;
+        let mb2 = create_mailbox(&app, &admin, &mark_id, "other@ex.com").await;
+
+        // Create with defaults; sender normalized to lowercase.
+        let (status, rule, _) = send(
+            &app,
+            authed("POST", "/api/admin/filing-rules", &admin,
+                Some(json!({ "mailboxId": mb, "senderEmail": "News@Letter.COM" }))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(rule["senderEmail"], "news@letter.com");
+        assert_eq!(rule["action"], "move_reads");
+        assert_eq!(rule["enabled"], true);
+        assert_eq!(rule["notifyBefore"], true);
+        assert_eq!(rule["userId"], mark_id.as_str());
+        let id = rule["id"].as_str().unwrap().to_string();
+
+        // Duplicate → 409; bad action → 400; unknown mailbox → 404; bad sender → 400.
+        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
+            Some(json!({ "mailboxId": mb, "senderEmail": "news@letter.com" })))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
+            Some(json!({ "mailboxId": mb, "senderEmail": "x@y.com", "action": "delete" })))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
+            Some(json!({ "mailboxId": "nope", "senderEmail": "x@y.com" })))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
+            Some(json!({ "mailboxId": mb, "senderEmail": "not-an-email" })))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // Second mailbox rule (domain wildcard, disabled, no notify).
+        let (s, r2, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
+            Some(json!({ "mailboxId": mb2, "senderEmail": "@substack.com",
+                         "enabled": false, "notifyBefore": false })))).await;
+        assert_eq!(s, StatusCode::CREATED);
+        assert_eq!(r2["enabled"], false);
+        assert_eq!(r2["notifyBefore"], false);
+
+        // List all / filtered.
+        let (_, all, _) = send(&app, authed("GET", "/api/admin/filing-rules", &admin, None)).await;
+        assert_eq!(all.as_array().unwrap().len(), 2);
+        let (_, only, _) = send(&app, authed("GET",
+            &format!("/api/admin/filing-rules?mailboxId={mb}"), &admin, None)).await;
+        assert_eq!(only.as_array().unwrap().len(), 1);
+        assert_eq!(only[0]["id"], id.as_str());
+
+        // PATCH disable + change sender; PUT alias works too.
+        let (s, upd, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
+            Some(json!({ "enabled": false, "senderEmail": "Digest@Letter.com" })))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(upd["enabled"], false);
+        assert_eq!(upd["senderEmail"], "digest@letter.com");
+        assert_eq!(upd["notifyBefore"], true);
+        let (s, upd, _) = send(&app, authed("PUT", &format!("/api/admin/filing-rules/{id}"), &admin,
+            Some(json!({ "enabled": true })))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(upd["enabled"], true);
+        assert_eq!(upd["senderEmail"], "digest@letter.com");
+
+        // Delete, then 404s.
+        let (s, _, _) = send(&app, authed("DELETE", &format!("/api/admin/filing-rules/{id}"), &admin, None)).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _, _) = send(&app, authed("DELETE", &format!("/api/admin/filing-rules/{id}"), &admin, None)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
+            Some(json!({ "enabled": false })))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn filing_rules_admin_only() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let mark = login(&app, "mark@ex.com", "markpass123").await;
+        let (s, _, _) = send(&app, authed("GET", "/api/admin/filing-rules", &mark, None)).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &mark,
+            Some(json!({ "mailboxId": "x", "senderEmail": "a@b.com" })))).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = send(
+            &app,
+            Request::builder().uri("/api/admin/filing-rules").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn filer_migrate_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("velo-test-{}", crate::state::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let control = dir.join("control.db");
+        // Init twice on the same file: migrations must not fail on re-run.
+        let s1 = AppState::init(control.to_str().unwrap(), dir.clone()).await;
+        drop(s1);
+        let s2 = AppState::init(control.to_str().unwrap(), dir.clone()).await;
+        let mut c = s2.control.lock().await;
+        let n: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name IN \
+             ('filing_rules','filing_state','idx_filing_rules_mailbox_sender')",
+        )
+        .fetch_one(&mut *c)
+        .await
+        .unwrap();
+        assert_eq!(n.0, 3);
     }
 }
