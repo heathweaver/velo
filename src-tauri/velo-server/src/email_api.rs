@@ -16,6 +16,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use velo_core::imap::scheduler::Priority;
 use velo_core::ops;
 use velo_core::{DeltaCheckRequest, ImapConfig, SmtpConfig};
 
@@ -57,6 +58,11 @@ fn bad(msg: String) -> Response {
     (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
 }
 
+fn priority_of(label: &Option<String>) -> Priority {
+    Priority::from_label(label.as_deref())
+}
+
+
 /// Pick the IMAP config to use: resolve from `mailboxId` (server-side, ownership
 /// enforced) when present, else fall back to a directly-supplied `config`.
 async fn imap_cfg(
@@ -92,6 +98,8 @@ struct ConfigOnly {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +107,8 @@ struct FolderReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
 }
 
@@ -107,8 +117,12 @@ struct FetchMessagesReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uids: Vec<u32>,
+    #[serde(rename = "headersOnly", default)]
+    headers_only: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +130,8 @@ struct NewUidsReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     #[serde(rename = "sinceUid")]
     since_uid: u32,
@@ -126,6 +142,8 @@ struct MessageBodyReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uid: u32,
 }
@@ -135,6 +153,8 @@ struct SetFlagsReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uids: Vec<u32>,
     flags: Vec<String>,
@@ -146,6 +166,8 @@ struct MoveReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uids: Vec<u32>,
     destination: String,
@@ -156,6 +178,8 @@ struct DeleteReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uids: Vec<u32>,
 }
@@ -165,6 +189,8 @@ struct AttachmentReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     uid: u32,
     #[serde(rename = "partId")]
@@ -176,6 +202,8 @@ struct AppendReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     flags: Option<String>,
     #[serde(rename = "rawMessage")]
@@ -187,6 +215,8 @@ struct SearchFolderReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     #[serde(rename = "sinceDate")]
     since_date: Option<String>,
@@ -197,6 +227,8 @@ struct SyncFolderReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folder: String,
     #[serde(rename = "batchSize")]
     batch_size: u32,
@@ -219,6 +251,8 @@ struct DeltaCheckReq {
     #[serde(rename = "mailboxId", default)]
     mailbox_id: Option<String>,
     config: Option<ImapConfig>,
+    #[serde(default)]
+    priority: Option<String>,
     folders: Vec<DeltaCheckRequest>,
 }
 
@@ -257,7 +291,7 @@ async fn imap_list_folders(
     Json(req): Json<ConfigOnly>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_list_folders(c).await),
+        Ok(c) => ok(ops::imap_list_folders(c, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -268,7 +302,7 @@ async fn imap_fetch_messages(
     Json(req): Json<FetchMessagesReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_fetch_messages(c, req.folder, req.uids).await),
+        Ok(c) => ok(ops::imap_fetch_messages(c, req.folder, req.uids, req.headers_only.unwrap_or(false), priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -279,7 +313,7 @@ async fn imap_fetch_new_uids(
     Json(req): Json<NewUidsReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_fetch_new_uids(c, req.folder, req.since_uid).await),
+        Ok(c) => ok(ops::imap_fetch_new_uids(c, req.folder, req.since_uid, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -290,7 +324,7 @@ async fn imap_search_all_uids(
     Json(req): Json<FolderReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_search_all_uids(c, req.folder).await),
+        Ok(c) => ok(ops::imap_search_all_uids(c, req.folder, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -301,7 +335,7 @@ async fn imap_fetch_message_body(
     Json(req): Json<MessageBodyReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_fetch_message_body(c, req.folder, req.uid).await),
+        Ok(c) => ok(ops::imap_fetch_message_body(c, req.folder, req.uid, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -312,7 +346,7 @@ async fn imap_fetch_raw_message(
     Json(req): Json<MessageBodyReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_fetch_raw_message(c, req.folder, req.uid).await),
+        Ok(c) => ok(ops::imap_fetch_raw_message(c, req.folder, req.uid, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -323,7 +357,7 @@ async fn imap_set_flags(
     Json(req): Json<SetFlagsReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_set_flags(c, req.folder, req.uids, req.flags, req.add).await),
+        Ok(c) => ok(ops::imap_set_flags(c, req.folder, req.uids, req.flags, req.add, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -334,7 +368,7 @@ async fn imap_move_messages(
     Json(req): Json<MoveReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_move_messages(c, req.folder, req.uids, req.destination).await),
+        Ok(c) => ok(ops::imap_move_messages(c, req.folder, req.uids, req.destination, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -345,7 +379,7 @@ async fn imap_delete_messages(
     Json(req): Json<DeleteReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_delete_messages(c, req.folder, req.uids).await),
+        Ok(c) => ok(ops::imap_delete_messages(c, req.folder, req.uids, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -356,7 +390,7 @@ async fn imap_get_folder_status(
     Json(req): Json<FolderReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_get_folder_status(c, req.folder).await),
+        Ok(c) => ok(ops::imap_get_folder_status(c, req.folder, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -367,7 +401,7 @@ async fn imap_fetch_attachment(
     Json(req): Json<AttachmentReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_fetch_attachment(c, req.folder, req.uid, req.part_id).await),
+        Ok(c) => ok(ops::imap_fetch_attachment(c, req.folder, req.uid, req.part_id, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -378,7 +412,7 @@ async fn imap_append_message(
     Json(req): Json<AppendReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_append_message(c, req.folder, req.flags, req.raw_message).await),
+        Ok(c) => ok(ops::imap_append_message(c, req.folder, req.flags, req.raw_message, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -389,7 +423,7 @@ async fn imap_search_folder(
     Json(req): Json<SearchFolderReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_search_folder(c, req.folder, req.since_date).await),
+        Ok(c) => ok(ops::imap_search_folder(c, req.folder, req.since_date, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -400,7 +434,7 @@ async fn imap_sync_folder(
     Json(req): Json<SyncFolderReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_sync_folder(c, req.folder, req.batch_size, req.since_date).await),
+        Ok(c) => ok(ops::imap_sync_folder(c, req.folder, req.batch_size, req.since_date, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
@@ -422,7 +456,7 @@ async fn imap_delta_check(
     Json(req): Json<DeltaCheckReq>,
 ) -> Response {
     match imap_cfg(&state, &user, &req.mailbox_id, req.config).await {
-        Ok(c) => ok(ops::imap_delta_check(c, req.folders).await),
+        Ok(c) => ok(ops::imap_delta_check(c, req.folders, priority_of(&req.priority)).await),
         Err(e) => bad(e),
     }
 }
