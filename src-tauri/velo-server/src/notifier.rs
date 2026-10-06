@@ -16,6 +16,7 @@
 
 use std::time::Duration;
 
+use velo_core::imap::scheduler::Priority;
 use velo_core::ops;
 use velo_core::ImapMessage;
 
@@ -100,7 +101,7 @@ async fn poll_mailbox(
     sender: Option<&MailboxCreds>,
 ) -> Result<(), String> {
     // Current highest UID in INBOX.
-    let status = ops::imap_get_folder_status(mb.imap.clone(), "INBOX".to_string()).await?;
+    let status = ops::imap_get_folder_status(mb.imap.clone(), "INBOX".to_string(), Priority::Background).await?;
     let high = status.uidnext.saturating_sub(1);
 
     let last = match get_last_uid(state, &mb.id).await {
@@ -118,7 +119,7 @@ async fn poll_mailbox(
 
     // Fetch the UIDs newer than `last`.
     let new_uids =
-        ops::imap_fetch_new_uids(mb.imap.clone(), "INBOX".to_string(), last).await?;
+        ops::imap_fetch_new_uids(mb.imap.clone(), "INBOX".to_string(), last, Priority::Background).await?;
     if new_uids.is_empty() {
         set_last_uid(state, &mb.id, high).await;
         return Ok(());
@@ -147,7 +148,7 @@ async fn poll_mailbox(
     for uid in new_uids {
         max_uid = max_uid.max(uid);
         let meta =
-            ops::imap_fetch_message_body(mb.imap.clone(), "INBOX".to_string(), uid).await;
+            ops::imap_fetch_message_body(mb.imap.clone(), "INBOX".to_string(), uid, Priority::Background).await;
         let (subject, from) = match meta {
             Ok(m) => message_summary(&m),
             Err(_) => ("New message".to_string(), mb.email.clone()),
