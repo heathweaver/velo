@@ -656,18 +656,22 @@ export async function imapInitialSync(
   let totalMessagesFound = 0;
   let storedCount = 0;
   let consecutiveFailures = 0;
+  let syncIncomplete = false;
   const folderErrors: string[] = [];
 
   for (let folderIdx = 0; folderIdx < syncableFolders.length; folderIdx++) {
     const folder = syncableFolders[folderIdx]!;
     if (folder.exists === 0) continue;
 
-    // Circuit breaker: skip remaining folders after too many consecutive failures
+    // Circuit breaker: skip remaining folders after too many consecutive failures.
+    // The account must not be marked synced, or the next run takes the delta
+    // path and treats the skipped folders as optional catch-up.
     if (consecutiveFailures >= CIRCUIT_BREAKER_MAX_FAILURES) {
       console.warn(
         `[imapSync] Circuit breaker: ${consecutiveFailures} consecutive connection failures, ` +
         `skipping remaining ${syncableFolders.length - folderIdx} folders`,
       );
+      syncIncomplete = true;
       break;
     }
 
@@ -839,8 +843,14 @@ export async function imapInitialSync(
     `[imapSync] Stored ${storedCount} messages in ${threadCount} threads (found ${totalMessagesFound} on server)`,
   );
 
-  // Only mark sync as complete if messages were stored OR no messages exist on server.
-  if (storedCount > 0 || totalMessagesFound === 0) {
+  // Only mark sync as complete when every folder was processed. A circuit-breaker
+  // stop leaves history_id unset, so the next run stays on the initial path and
+  // walks the skipped folders instead of reporting the account as done.
+  if (syncIncomplete) {
+    console.warn(
+      `[imapSync] Sync incomplete — circuit breaker skipped folders, NOT marking sync as complete`,
+    );
+  } else if (storedCount > 0 || totalMessagesFound === 0) {
     await updateAccountSyncState(accountId, `imap-synced-${Date.now()}`);
   } else {
     console.warn(
@@ -919,13 +929,17 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
 
   // Handle new folders: search for UIDs then fetch in chunks
   let consecutiveFailures = 0;
+  let skippedNewFolders = false;
   const deltaFolderErrors: string[] = [];
   for (const folder of newFolders) {
-    // Circuit breaker: skip remaining new folders after too many failures
+    // Circuit breaker: skip remaining new folders after too many failures.
+    // Those folders have no sync state yet, but stamping the account synced
+    // hides the gap. Leave the stamp alone so the gap stays visible.
     if (consecutiveFailures >= CIRCUIT_BREAKER_MAX_FAILURES) {
       console.warn(
         `[imapSync] Delta sync circuit breaker: ${consecutiveFailures} consecutive failures, skipping remaining new folders`,
       );
+      skippedNewFolders = true;
       break;
     }
     if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
@@ -1135,8 +1149,13 @@ export async function imapDeltaSync(accountId: string, daysBack = 365): Promise<
 
   await materialiseThreads(accountId, allThreadable, allMeta, labelsByRfcId);
 
-  // Update sync state timestamp
-  await updateAccountSyncState(accountId, `imap-synced-${Date.now()}`);
+  if (skippedNewFolders) {
+    console.warn(
+      `[imapSync] Delta sync incomplete — circuit breaker skipped new folders, NOT marking sync as complete`,
+    );
+  } else {
+    await updateAccountSyncState(accountId, `imap-synced-${Date.now()}`);
+  }
 
   // Bodies are already on disk, so there is nothing to hand back but the count.
   return { messages: [], storedCount };

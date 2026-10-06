@@ -89,7 +89,7 @@ import {
   createMockImapFetchResult,
 } from "@/test/mocks";
 import { imapListFolders, imapSearchFolder, imapFetchMessages, imapDeltaCheck } from "./tauriCommands";
-import { getAccount } from "../db/accounts";
+import { getAccount, updateAccountSyncState } from "../db/accounts";
 import { withTransaction } from "../db/connection";
 import { upsertMessage, updateMessageThreadIds } from "../db/messages";
 import { upsertThread, deleteThread } from "../db/threads";
@@ -605,6 +605,36 @@ describe("imapInitialSync", () => {
 
     // All 4 folders should be attempted (circuit breaker resets after success on f3)
     expect(mockImapSearchFolder).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not mark sync complete when the circuit breaker skips folders", async () => {
+    const msg = createMockImapMessage({
+      uid: 1,
+      message_id: "<m1@test>",
+      date: Math.floor(Date.now() / 1000),
+    });
+    const folders = [
+      createMockImapFolder({ path: "INBOX", raw_path: "INBOX", exists: 1 }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        createMockImapFolder({ path: `folder-${i}`, raw_path: `folder-${i}`, exists: 10 }),
+      ),
+    ];
+    mockImapListFolders.mockResolvedValue(folders);
+    mockImapSearchFolder
+      .mockResolvedValueOnce({
+        uids: [msg.uid],
+        folder_status: createMockImapFolderStatus({ exists: 1 }),
+      })
+      .mockRejectedValue(new Error("TCP connect timed out (os error 60)"));
+    mockImapFetchMessages.mockResolvedValue(createMockImapFetchResult([msg]));
+
+    const syncPromise = imapInitialSync("acc-1");
+    await vi.runAllTimersAsync();
+    await syncPromise;
+
+    // Inbox succeeded, then five connection failures tripped the breaker.
+    expect(mockImapSearchFolder).toHaveBeenCalledTimes(6);
+    expect(updateAccountSyncState).not.toHaveBeenCalled();
   });
 
   it("continues on non-connection errors without triggering circuit breaker", async () => {
