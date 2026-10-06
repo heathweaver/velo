@@ -219,7 +219,7 @@ fn sender_label(to: &str) -> String {
 }
 
 /// Minimal RFC822 builder for the notification (plain alternative + html).
-fn build_raw_email(from: &str, to: &str, subject: &str, html: &str, text: &str) -> String {
+pub(crate) fn build_raw_email(from: &str, to: &str, subject: &str, html: &str, text: &str) -> String {
     let boundary = "velo_notify_boundary_8f3a";
     let date = httpdate_now();
     format!(
@@ -242,13 +242,13 @@ fn build_raw_email(from: &str, to: &str, subject: &str, html: &str, text: &str) 
     )
 }
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
-fn base64_url_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_url_encode(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }

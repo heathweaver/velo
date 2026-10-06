@@ -47,6 +47,9 @@ variables:
 | `VELO_PUBLIC_URL` | _(empty)_ | Public base URL used in new-mail notification links (e.g. `https://mail.example.com`) |
 | `VELO_NOTIFY` | _(on)_ | Set to `0` to disable new-mail email notifications |
 | `VELO_NOTIFY_INTERVAL` | `120` | Seconds between new-mail polls |
+| `VELO_FILER` | _(off)_ | Set to `1` to enable the server-side Reads filer (MOVE matching newsletters to `Reads`) |
+| `VELO_FILER_INTERVAL` | `120` | Seconds between filer polls (min 10) |
+| `VELO_FILER_NOTIFY_DELAY` | `5` | Seconds between the "filing" notification and the MOVE |
 | `VITE_API_BASE` | _(same origin)_ | Build-time only: set if the API lives on a different origin than the page |
 
 ### First run (creating the admin)
