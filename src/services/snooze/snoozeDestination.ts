@@ -47,6 +47,36 @@ const DEFAULT_SNOOZE_FOLDER_NAME = "Later";
 export async function resolveSnoozeDestination(
   accountId: string,
 ): Promise<SnoozeDestination | null> {
+  const existing = await lookupSnoozeDestination(accountId);
+  if (existing) return existing;
+
+  const account = await getAccount(accountId);
+  if (!account || account.provider === "gmail_api") return null;
+
+  const db = await getDb();
+  const rows = await db.select<{ id: string; name: string; imap_folder_path: string | null }[]>(
+    `SELECT id, name, imap_folder_path FROM labels
+     WHERE account_id = $1 AND imap_folder_path IS NOT NULL`,
+    [accountId],
+  );
+  return createSnoozeFolder(accountId, rows);
+}
+
+/**
+ * Find the label id used for the sidebar Snoozed view — never creates folders.
+ *
+ * IMAP (and Spark) park snoozed mail in Later / Snoozed folders whose label id
+ * is `folder-INBOX.Later`, not Gmail's `SNOOZED`. The list must query that id
+ * or the Snoozed sidebar stays empty while Spark shows the same mail.
+ */
+export async function lookupSnoozeLabelId(accountId: string): Promise<string | null> {
+  const dest = await lookupSnoozeDestination(accountId);
+  return dest?.labelId ?? null;
+}
+
+async function lookupSnoozeDestination(
+  accountId: string,
+): Promise<SnoozeDestination | null> {
   const account = await getAccount(accountId);
   if (!account) return null;
 
@@ -80,7 +110,7 @@ export async function resolveSnoozeDestination(
     }
   }
 
-  return createSnoozeFolder(accountId, rows);
+  return null;
 }
 
 /**
