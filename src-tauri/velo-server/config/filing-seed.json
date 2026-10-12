@@ -1,0 +1,22 @@
+{
+  "_comment": "Declarative filing seed. Imported idempotently on startup (upsert; never deletes). Passwords are never stored here: password_env names the env var holding it.",
+  "mailboxes": [
+    {
+      "email": "me@heathweaver.com",
+      "imap_host": "imap.dreamhost.com", "imap_port": 993, "imap_security": "tls",
+      "smtp_host": "smtp.dreamhost.com", "smtp_port": 465, "smtp_security": "tls",
+      "password_env": "DREAMHOST_ME_PASSWORD",
+      "reads_senders": [
+        "news@email.womensbest.com", "connect@scalable.co", "michael@socialmediaexaminer.com",
+        "support@aupairworld.com", "tim@fourhourbody.com", "info@aupair.com",
+        "updates@eu.lovevery.com", "hello@myvariations.com", "daniel@dbusta.com",
+        "support@myhumehealth.com", "socialgrowthengineer@mail.beehiiv.com", "madz@heyizmadz.com",
+        "lara@theknownclub.com", "hello@fractionaljobs.io", "emily.mcguire@email.close.com",
+        "hello@justinwelsh.me", "dennis@d-doubleumedia.com", "info@lanieri.com",
+        "noreply@info.jamesedition.com", "no-reply=substack.com@mg2.substack.com",
+        "hi@newsletter.bemorerelatable.com", "mit-openlearning@mit.edu", "hello@aimlapi.com",
+        "@mail.beehiiv.com", "@mg2.substack.com"
+      ]
+    }
+  ]
+}

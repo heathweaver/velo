@@ -77,3 +77,4 @@ velo-*.tar.gz
 *.flatpak
 *.rpm
 *.src.rpm
+.local-admin.env

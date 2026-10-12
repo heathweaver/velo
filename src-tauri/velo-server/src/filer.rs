@@ -194,7 +194,7 @@ impl From<RuleRow> for RuleView {
 
 /// Normalize a rule sender: trimmed + lowercased. Accepts a full address
 /// (`news@example.com`) or a domain wildcard (`@example.com`).
-fn normalize_sender(s: &str) -> Result<String, String> {
+pub(crate) fn normalize_sender(s: &str) -> Result<String, String> {
     let s = s.trim().trim_start_matches('<').trim_end_matches('>').trim().to_lowercase();
     if s.is_empty() {
         return Err("senderEmail is required".into());
@@ -491,11 +491,61 @@ async fn send_filing_notice(
     Ok(())
 }
 
+// ---------- one-time backfill ----------
+
+/// Apply the mailbox's enabled rules to EVERYTHING currently in INBOX (not just
+/// mail past the watermark). Matches are MOVEd to Reads; nothing else is
+/// touched, no notifications, nothing deleted. Returns per-sender counts.
+pub async fn backfill_mailbox(
+    state: &AppState,
+    mailbox_id: &str,
+) -> Result<serde_json::Value, String> {
+    let mb = mailboxes::all_with_creds(state)
+        .await
+        .into_iter()
+        .find(|m| m.id == mailbox_id)
+        .ok_or("Mailbox not found")?;
+    let rules = enabled_rules_for(state, &mb.id).await;
+    if rules.is_empty() {
+        return Ok(json!({ "moved": 0, "scanned": 0, "bySender": {} }));
+    }
+    let folders = ops::imap_list_folders(mb.imap.clone(), Priority::Background).await?;
+    let dest = resolve_reads_folder(&folders).ok_or("No Reads folder (create a top-level 'Reads')")?;
+    let uids = ops::imap_search_all_uids(mb.imap.clone(), "INBOX".into(), Priority::Background).await?;
+    let mut by_sender: std::collections::BTreeMap<String, u32> = Default::default();
+    let mut matched: Vec<u32> = Vec::new();
+    for chunk in uids.chunks(FETCH_CHUNK) {
+        let res = ops::imap_fetch_messages(mb.imap.clone(), "INBOX".into(), chunk.to_vec(), true, Priority::Background).await?;
+        for m in res.messages {
+            if match_rule(&rules, &m).is_some() {
+                let a = m.from_address.as_deref().and_then(extract_address).unwrap_or_default();
+                *by_sender.entry(a).or_default() += 1;
+                matched.push(m.uid);
+            }
+        }
+    }
+    let mut moved = 0usize;
+    for chunk in matched.chunks(FETCH_CHUNK) {
+        ops::imap_move_messages(mb.imap.clone(), "INBOX".into(), chunk.to_vec(), dest.clone(), Priority::Background).await?;
+        moved += chunk.len();
+    }
+    tracing::info!("filer: backfill {} scanned {} moved {moved} → {dest} {:?}", mb.email, uids.len(), by_sender);
+    Ok(json!({ "mailbox": mb.email, "dest": dest, "scanned": uids.len(), "moved": moved, "bySender": by_sender }))
+}
+
+async fn backfill_endpoint(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match backfill_mailbox(&state, &id).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
 // ---------- HTTP API (admin) ----------
 
 pub fn admin_router(state: AppState) -> Router {
     Router::new()
         .route("/filing-rules", get(list_rules).post(create_rule))
+        .route("/filing-backfill/:mailbox_id", axum::routing::post(backfill_endpoint))
         .route(
             "/filing-rules/:id",
             get(get_rule).patch(update_rule).put(update_rule).delete(delete_rule),
