@@ -24,6 +24,7 @@ mod profile;
 mod server_crypto;
 mod state;
 mod filer;
+mod seed;
 
 use axum::{routing::get, Router};
 use state::AppState;
@@ -60,6 +61,9 @@ async fn main() {
 
     // Background: email users when new mail arrives in their mailbox.
     notifier::spawn(state.clone());
+
+    // Declarative mailbox + Reads rules seed (idempotent, never deletes).
+    seed::import(&state).await;
 
     // Optional Reads filer (VELO_FILER=1). Default off.
     filer::spawn(state.clone());
