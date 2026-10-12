@@ -1153,7 +1153,7 @@ pub async fn raw_fetch_messages(
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, xoauth2.as_bytes());
         format!("a1 AUTHENTICATE XOAUTH2 {b64}\r\n")
     } else {
-        format!("a1 LOGIN \"{}\" \"{}\"\r\n", config.username, config.password)
+        format!("a1 LOGIN {} {}\r\n", imap_quote(&config.username), imap_quote(&config.password))
     };
     raw_send_and_wait(&mut reader, login_cmd.as_bytes(), "a1").await?;
 
@@ -1255,7 +1255,7 @@ pub async fn raw_fetch_diagnostic(
     }
 
     // LOGIN
-    let login_cmd = format!("a1 LOGIN \"{}\" \"{}\"\r\n", config.username, config.password);
+    let login_cmd = format!("a1 LOGIN {} {}\r\n", imap_quote(&config.username), imap_quote(&config.password));
     stream.write_all(login_cmd.as_bytes()).await.map_err(|e| format!("LOGIN: {e}"))?;
     let n = stream.read(&mut buf).await.map_err(|e| format!("LOGIN read: {e}"))?;
     output.push_str(&format!("S: {}", String::from_utf8_lossy(&buf[..n])));
@@ -2156,5 +2156,31 @@ Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
         let msg = parse_message(&parser, raw, 1, "INBOX", raw.len() as u32, true, false, false, None).unwrap();
         assert_eq!(msg.body_text.as_deref().map(str::trim), Some("Hello there"));
         assert!(!msg.has_attachments_hint);
+    }
+}
+
+
+/// Encode a string as an IMAP quoted-string (RFC 3501 §4.3), escaping `\` and `"`.
+pub(crate) fn imap_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+mod imap_quote_tests {
+    use super::imap_quote;
+
+    #[test]
+    fn escapes_quotes_and_backslashes() {
+        assert_eq!(imap_quote("plain"), "\"plain\"");
+        assert_eq!(imap_quote(r#"a"b\c"#), r#""a\"b\\c""#);
     }
 }
