@@ -27,6 +27,7 @@ import {
   Check,
   Mail,
   Info,
+  ShieldCheck,
   ExternalLink,
   Github,
   Scale,
@@ -37,6 +38,8 @@ import {
   RotateCcw,
   type LucideIcon,
 } from "lucide-react";
+import { AdminPanel } from "@/components/admin/AdminPanel";
+import { useAuthStore } from "@/stores/authStore";
 import { SignatureEditor } from "./SignatureEditor";
 import { TemplateEditor } from "./TemplateEditor";
 import { FilterEditor } from "./FilterEditor";
@@ -74,7 +77,7 @@ function syncWindowWidth(value: string): number {
 import { TextField } from "@/components/ui/TextField";
 import appIcon from "@/assets/icon.png";
 
-type SettingsTab = "general" | "notifications" | "composing" | "mail-rules" | "people" | "accounts" | "shortcuts" | "ai" | "about";
+type SettingsTab = "general" | "notifications" | "composing" | "mail-rules" | "people" | "accounts" | "shortcuts" | "ai" | "about" | "admin";
 
 const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: Settings },
@@ -86,6 +89,7 @@ const tabs: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "ai", label: "AI", icon: Sparkles },
   { id: "about", label: "About", icon: Info },
+  { id: "admin", label: "Admin", icon: ShieldCheck },
 ];
 
 export function SettingsPage() {
@@ -118,7 +122,9 @@ export function SettingsPage() {
   const accounts = useAccountStore((s) => s.accounts);
   const removeAccountFromStore = useAccountStore((s) => s.removeAccount);
   const { tab } = useParams({ strict: false }) as { tab?: string };
-  const activeTab = (tab && tabs.some((t) => t.id === tab) ? tab : "general") as SettingsTab;
+  const isAdmin = useAuthStore((st) => st.user?.role === "admin");
+  const visibleTabs = tabs.filter((t) => t.id !== "admin" || isAdmin);
+  const activeTab = (tab && visibleTabs.some((t) => t.id === tab) ? tab : "general") as SettingsTab;
   const setActiveTab = (t: SettingsTab) => navigateToSettings(t);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [undoSendDelay, setUndoSendDelay] = useState("5");
@@ -368,7 +374,7 @@ export function SettingsPage() {
     [],
   );
 
-  const activeTabDef = tabs.find((t) => t.id === activeTab);
+  const activeTabDef = visibleTabs.find((t) => t.id === activeTab);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-bg-primary/50">
@@ -388,7 +394,7 @@ export function SettingsPage() {
       <div className="flex flex-1 min-h-0">
         {/* Vertical tab sidebar */}
         <nav className="w-48 border-r border-border-primary py-2 overflow-y-auto shrink-0 bg-bg-primary/30">
-          {tabs.map((tab) => {
+          {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
@@ -1431,6 +1437,8 @@ export function SettingsPage() {
                   </Section>
                 </>
               )}
+
+              {activeTab === "admin" && <AdminPanel />}
 
               {activeTab === "about" && (
                 <>

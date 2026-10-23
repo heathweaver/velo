@@ -14,7 +14,6 @@ const HelpPage = lazy(() => import("@/components/help/HelpPage").then((m) => ({ 
 const CalendarPage = lazy(() => import("@/components/calendar/CalendarPage").then((m) => ({ default: m.CalendarPage })));
 const TasksPage = lazy(() => import("@/components/tasks/TasksPage").then((m) => ({ default: m.TasksPage })));
 const AttachmentLibrary = lazy(() => import("@/components/attachments/AttachmentLibrary").then((m) => ({ default: m.AttachmentLibrary })));
-const AdminPanel = lazy(() => import("@/components/admin/AdminPanel").then((m) => ({ default: m.AdminPanel })));
 
 // ---------- Search param validation ----------
 type MailSearch = {
@@ -192,21 +191,13 @@ export const calendarRoute = createRoute({
   component: CalendarPageWrapper,
 });
 
-// ---------- /admin (web admin only) ----------
-function AdminPanelWrapper() {
-  return (
-    <ErrorBoundary name="AdminPanel">
-      <Suspense fallback={<div className="flex-1 flex items-center justify-center text-text-tertiary text-sm">Loading…</div>}>
-        <AdminPanel />
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
+// ---------- /admin (old path; the panel now lives in settings) ----------
 export const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "admin",
-  component: AdminPanelWrapper,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/$tab", params: { tab: "admin" } });
+  },
 });
 
 // ---------- /help (redirect to /help/getting-started) ----------
