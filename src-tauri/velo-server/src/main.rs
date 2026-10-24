@@ -14,6 +14,7 @@
 //!   VELO_ADMIN_EMAIL    bootstrap admin email       (first run only)
 //!   VELO_ADMIN_PASSWORD bootstrap admin password    (first run only)
 
+mod agent_access;
 mod auth;
 mod db_gateway;
 mod email_api;
@@ -110,6 +111,7 @@ fn build_app(state: AppState) -> Router {
         .nest("/admin", mailboxes::admin_router(state.clone()))
         .nest("/admin", profile::admin_router(state.clone()))
         .nest("/admin", filer::admin_router(state.clone()))
+        .nest("/admin", agent_access::admin_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_admin,
@@ -123,7 +125,11 @@ fn build_app(state: AppState) -> Router {
         .merge(admin_only)
         .merge(protected);
 
-    let mut app = Router::new().nest("/api", api).layer(CorsLayer::permissive());
+    // The MCP endpoint authenticates with an agent passphrase, not a session.
+    let mut app = Router::new()
+        .nest("/api", api)
+        .merge(agent_access::mcp_router(state.clone()))
+        .layer(CorsLayer::permissive());
 
     // Optionally serve the built frontend (single-page app) from VELO_STATIC_DIR.
     // Unknown paths fall back to index.html so client-side routes (e.g. /settings)
@@ -715,5 +721,267 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n.0, 3);
+    }
+    // ---------- agent access (MCP passphrases) ----------
+
+    fn with_cookie(mut r: Request<Body>, cookie: &str) -> Request<Body> {
+        r.headers_mut().insert("cookie", cookie.parse().unwrap());
+        r
+    }
+
+    /// POST a JSON-RPC message to /mcp with an optional bearer passphrase.
+    async fn mcp(app: &axum::Router, bearer: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json");
+        if let Some(t) = bearer {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        let (status, val, _) = send(app, b.body(Body::from(body.to_string())).unwrap()).await;
+        (status, val)
+    }
+
+    fn rpc(id: i64, method: &str, params: Value) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
+    }
+
+    async fn mint(
+        app: &axum::Router,
+        admin: &str,
+        scope: &str,
+        block: bool,
+        mailboxes: Vec<String>,
+        seconds: i64,
+    ) -> (StatusCode, Value) {
+        let (s, b, _) = send(
+            app,
+            with_cookie(
+                json_post(
+                    "/api/admin/agent-access/passphrases",
+                    json!({
+                        "label": "Triage", "scope": scope, "blockDestructive": block,
+                        "mailboxIds": mailboxes, "expiresInSeconds": seconds
+                    }),
+                ),
+                admin,
+            ),
+        )
+        .await;
+        (s, b)
+    }
+
+    async fn tool_names(app: &axum::Router, token: &str) -> Vec<String> {
+        let (s, v) = mcp(app, Some(token), rpc(1, "tools/list", json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    async fn call(app: &axum::Router, token: &str, tool: &str, args: Value) -> Value {
+        let (s, v) = mcp(app, Some(token), rpc(2, "tools/call", json!({ "name": tool, "arguments": args }))).await;
+        assert_eq!(s, StatusCode::OK);
+        v["result"].clone()
+    }
+
+    #[tokio::test]
+    async fn only_an_admin_can_mint_agent_passphrases() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let member = login(&app, "mark@ex.com", "markpass123").await;
+
+        let (s, _) = mint(&app, &member, "read", true, vec![boxid.clone()], 3600).await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (s, _, _) = send(
+            &app,
+            json_post("/api/admin/agent-access/passphrases", json!({ "label": "x" })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = mint(&app, &admin, "read", true, vec![boxid], 3600).await;
+        assert_eq!(s, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn minting_rejects_bad_requests() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+
+        let (s, _) = mint(&app, &admin, "read", true, vec![], 3600).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "needs a mailbox");
+        let (s, _) = mint(&app, &admin, "read", true, vec!["nope".into()], 3600).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "mailbox must exist");
+        let (s, _) = mint(&app, &admin, "root", true, vec![boxid.clone()], 3600).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "unknown scope");
+        let (s, _) = mint(&app, &admin, "read", true, vec![boxid.clone()], 5).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "too short");
+        let (s, _) = mint(&app, &admin, "read", true, vec![boxid], 400 * 24 * 3600).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "too long");
+    }
+
+    #[tokio::test]
+    async fn mcp_needs_a_valid_passphrase_not_a_session() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let init = rpc(1, "initialize", json!({ "protocolVersion": "2025-06-18" }));
+
+        let (s, _) = mcp(&app, None, init.clone()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = mcp(&app, Some("vpk_not-a-real-one"), init.clone()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // A signed-in admin session does not open the agent endpoint.
+        let (s, _, _) = send(
+            &app,
+            with_cookie(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(init.to_string()))
+                    .unwrap(),
+                &admin,
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn read_only_passphrase_sees_only_its_mailbox_and_cannot_write() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let allowed = create_mailbox(&app, &admin, &owner, "allowed@ex.com").await;
+        let other = create_mailbox(&app, &admin, &owner, "other@ex.com").await;
+        let (_, minted) = mint(&app, &admin, "read", true, vec![allowed.clone()], 3600).await;
+        let token = minted["passphrase"].as_str().unwrap().to_string();
+        assert!(token.starts_with("vpk_"));
+
+        let (s, v) = mcp(&app, Some(&token), rpc(1, "initialize", json!({ "protocolVersion": "2025-06-18" }))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["result"]["serverInfo"]["name"], "velo-mcp");
+
+        let names = tool_names(&app, &token).await;
+        assert!(names.contains(&"list_messages".to_string()));
+        for hidden in ["send_message", "set_flags", "move_messages", "delete_messages"] {
+            assert!(!names.contains(&hidden.to_string()), "{hidden} must be hidden from a read-only agent");
+        }
+
+        let listed = call(&app, &token, "list_mailboxes", json!({})).await;
+        let text = listed["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("allowed@ex.com") && !text.contains("other@ex.com"));
+
+        // A mailbox outside the grant is refused, by id or by address.
+        for wanted in [other.as_str(), "other@ex.com"] {
+            let r = call(&app, &token, "list_folders", json!({ "mailbox": wanted })).await;
+            assert_eq!(r["isError"], true);
+            assert!(r["content"][0]["text"].as_str().unwrap().contains("cannot use that mailbox"));
+        }
+        // Calling a write tool anyway is denied even though it was never listed.
+        let r = call(&app, &token, "send_message", json!({ "mailbox": allowed, "to": ["a@b.com"], "subject": "s", "body": "b" })).await;
+        assert_eq!(r["isError"], true);
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn blocked_destructive_stops_deletion_but_not_sending_tools() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let (_, blocked) = mint(&app, &admin, "read_send", true, vec![boxid.clone()], 3600).await;
+        let blocked = blocked["passphrase"].as_str().unwrap().to_string();
+        let (_, open) = mint(&app, &admin, "read_send", false, vec![boxid.clone()], 3600).await;
+        let open = open["passphrase"].as_str().unwrap().to_string();
+
+        let names = tool_names(&app, &blocked).await;
+        assert!(names.contains(&"send_message".to_string()));
+        assert!(names.contains(&"move_messages".to_string()));
+        assert!(!names.contains(&"delete_messages".to_string()));
+        assert!(tool_names(&app, &open).await.contains(&"delete_messages".to_string()));
+
+        let r = call(&app, &blocked, "delete_messages", json!({ "mailbox": boxid, "folder": "INBOX", "uids": [1] })).await;
+        assert_eq!(r["isError"], true);
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("blocked"));
+        // Marking \Deleted is the same thing by another route.
+        let r = call(&app, &blocked, "set_flags", json!({ "mailbox": boxid, "folder": "INBOX", "uids": [1], "flags": ["\\Deleted"], "add": true })).await;
+        assert_eq!(r["isError"], true);
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("blocked"));
+    }
+
+    #[tokio::test]
+    async fn revoked_passphrase_stops_working_and_activity_is_logged() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let (_, minted) = mint(&app, &admin, "read", true, vec![boxid.clone()], 3600).await;
+        let token = minted["passphrase"].as_str().unwrap().to_string();
+        let id = minted["id"].as_str().unwrap().to_string();
+
+        call(&app, &token, "list_mailboxes", json!({})).await;
+        call(&app, &token, "send_message", json!({ "mailbox": boxid, "to": ["a@b.com"], "subject": "s", "body": "b" })).await;
+
+        let (s, audit, _) = send(
+            &app,
+            with_cookie(Request::builder().uri("/api/admin/agent-access/audit").body(Body::empty()).unwrap(), &admin),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let rows = audit.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["tool"], "send_message");
+        assert_eq!(rows[0]["outcome"], "denied");
+        assert_eq!(rows[1]["tool"], "list_mailboxes");
+        assert_eq!(rows[1]["label"], "Triage");
+
+        // The list shows it active with a last-used time, and never the secret.
+        let (_, list, _) = send(
+            &app,
+            with_cookie(Request::builder().uri("/api/admin/agent-access/passphrases").body(Body::empty()).unwrap(), &admin),
+        )
+        .await;
+        assert_eq!(list[0]["status"], "active");
+        assert!(list[0]["lastUsedAt"].is_number());
+        assert!(!list.to_string().contains(&token));
+
+        let (s, _, _) = send(
+            &app,
+            with_cookie(
+                Request::builder().method("DELETE").uri(format!("/api/admin/agent-access/passphrases/{id}")).body(Body::empty()).unwrap(),
+                &admin,
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = mcp(&app, Some(&token), rpc(3, "tools/list", json!({}))).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn expired_passphrase_stops_working() {
+        let dir = std::env::temp_dir().join(format!("velo-test-{}", crate::state::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("VELO_ADMIN_EMAIL", "admin@example.com");
+        std::env::set_var("VELO_ADMIN_PASSWORD", "admin-pass-123");
+        std::env::set_var("VELO_SECRET_KEY", base64::engine::general_purpose::STANDARD.encode([9u8; 32]));
+        crate::server_crypto::init_key(&dir.join("unused.key"));
+        let state = AppState::init(dir.join("control.db").to_str().unwrap(), dir.clone()).await;
+        let app = build_app(state.clone());
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let (_, minted) = mint(&app, &admin, "read", true, vec![boxid], 3600).await;
+        let token = minted["passphrase"].as_str().unwrap().to_string();
+        assert_eq!(mcp(&app, Some(&token), rpc(1, "ping", json!({}))).await.0, StatusCode::OK);
+
+        {
+            let mut c = state.control.lock().await;
+            sqlx::query("UPDATE agent_passphrases SET expires_at = 1").execute(&mut *c).await.unwrap();
+        }
+        assert_eq!(mcp(&app, Some(&token), rpc(2, "ping", json!({}))).await.0, StatusCode::UNAUTHORIZED);
     }
 }

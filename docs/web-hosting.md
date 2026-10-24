@@ -93,6 +93,30 @@ mail.example.com {
 Everything is in the single `VELO_DB` file. Stop the server (or use the SQLite
 backup API) and copy `velo.db` (plus `velo.db-wal`/`velo.db-shm` if present).
 
+## Agent access (MCP)
+
+Agents reach mail through an MCP endpoint at `/mcp` on the same host as Velo
+(for example `https://velo.example.com/mcp`). An agent never uses your sign-in:
+you give it a passphrase of its own.
+
+In **Settings → Admin → Agent access**, create a passphrase and choose:
+
+- **Mailboxes** it can use. It cannot see or reach any other mailbox.
+- **What it can do**: *Read only*, or *Read, send, mark and move*.
+- **Block permanent deletion** (on by default). When it is on, the agent has no
+  delete tool, and setting the `\Deleted` flag is refused too.
+- **Expiry**: 1 hour, 1 day, 7 days or 30 days.
+
+The passphrase (`vpk_…`) is shown once. Velo stores only a hash, so a lost one
+is replaced, not recovered. The agent sends it as `Authorization: Bearer
+vpk_…` using MCP Streamable HTTP. **Revoke** stops it at once, and **Recent
+agent activity** lists every tool call (tool, mailbox, allowed or denied), never
+message content.
+
+Tools: `list_mailboxes`, `list_folders`, `list_messages`, `read_message` always;
+`send_message`, `set_flags`, `move_messages` for read-and-send; `delete_messages`
+only when deletion is not blocked. A read-only agent is not shown the others.
+
 ## What works today vs. later phases
 
 - ✅ IMAP/SMTP mail over HTTP: list folders, fetch/read, reply/send,

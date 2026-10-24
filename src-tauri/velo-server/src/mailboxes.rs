@@ -157,6 +157,21 @@ fn row_to_creds(m: MailboxRow) -> Result<MailboxCreds, String> {
     })
 }
 
+/// One mailbox's resolved credentials by id, with no user check. Only for
+/// callers that have already authorised the mailbox some other way (the agent
+/// access grant lists the mailboxes it may use).
+pub async fn creds_for(state: &AppState, id: &str) -> Result<MailboxCreds, String> {
+    let m = fetch_mailbox(state, id)
+        .await
+        .ok_or_else(|| "Mailbox not found".to_string())?;
+    row_to_creds(m)
+}
+
+/// Whether a mailbox id exists (for validating an agent grant).
+pub async fn exists(state: &AppState, id: &str) -> bool {
+    fetch_mailbox(state, id).await.is_some()
+}
+
 /// All provisioned mailboxes with resolved credentials (server-internal).
 pub async fn all_with_creds(state: &AppState) -> Vec<MailboxCreds> {
     let mut control = state.control.lock().await;
