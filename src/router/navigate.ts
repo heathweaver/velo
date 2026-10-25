@@ -34,7 +34,7 @@ export function navigateToLabel(
   }
 
   if (label === "admin") {
-    router.navigate({ to: "/admin" });
+    navigateToSettings("admin");
     return;
   }
 

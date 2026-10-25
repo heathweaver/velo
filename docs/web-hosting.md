@@ -93,6 +93,30 @@ mail.example.com {
 Everything is in the single `VELO_DB` file. Stop the server (or use the SQLite
 backup API) and copy `velo.db` (plus `velo.db-wal`/`velo.db-shm` if present).
 
+## Agent access (MCP)
+
+Agents reach mail through an MCP endpoint at `/mcp` on the same host as Velo
+(for example `https://velo.example.com/mcp`). An agent never uses your sign-in:
+you give it a passphrase of its own.
+
+In **Settings → Admin → Agent access**, create a passphrase and choose:
+
+- **Mailboxes** it can use. It cannot see or reach any other mailbox.
+- **What it can do**: *Read only*, or *Read, send, mark and move*.
+- **Block permanent deletion** (on by default). When it is on, the agent has no
+  delete tool, and setting the `\Deleted` flag is refused too.
+- **Expiry**: 1 hour, 1 day, 7 days or 30 days.
+
+The passphrase (`vpk_…`) is shown once. Velo stores only a hash, so a lost one
+is replaced, not recovered. The agent sends it as `Authorization: Bearer
+vpk_…` using MCP Streamable HTTP. **Revoke** stops it at once, and **Recent
+agent activity** lists every tool call (tool, mailbox, allowed or denied), never
+message content.
+
+Tools: `list_mailboxes`, `list_folders`, `list_messages`, `read_message` always;
+`send_message`, `set_flags`, `move_messages` for read-and-send; `delete_messages`
+only when deletion is not blocked. A read-only agent is not shown the others.
+
 ## What works today vs. later phases
 
 - ✅ IMAP/SMTP mail over HTTP: list folders, fetch/read, reply/send,
@@ -106,3 +130,11 @@ backup API) and copy `velo.db` (plus `velo.db-wal`/`velo.db-shm` if present).
   can't change them).
 - ✅ **New-mail email notifications** with a one-click link back into the app.
 - Mail is IMAP/SMTP only (no Gmail OAuth), by design.
+
+### Inbox rules and organising (MCP)
+
+Agents with a read+send passphrase can also organise the inbox: `list_rules`, `create_rule`, `update_rule`, `delete_rule`, `apply_rules` and `create_folder`. A rule says "when from / to / subject contains some text, move to a folder, mark read, or star" (the basic Apple Mail set). Rules never delete mail. They run on new INBOX mail every two minutes once a mailbox has an enabled rule (the first pass only records where the inbox is, so nothing old is touched), and `apply_rules` runs them over the newest messages already in a folder. `list_rules` is available to read-only passphrases.
+
+### Accounts live on the server
+
+When an admin opens the web app, any IMAP account that was added only in that browser is uploaded to the server as a provisioned mailbox (the browser decrypts the password it holds), and the browser copy is replaced by the server-backed one. Agent passphrases can then be granted any of the accounts.

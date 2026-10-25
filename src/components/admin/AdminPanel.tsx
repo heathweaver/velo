@@ -16,6 +16,7 @@ import {
   setUserProfile,
   type AdminProfileView,
 } from "../../services/web/profileService";
+import { AgentAccessSection } from "./AgentAccessSection";
 
 /**
  * Admin-only management panel: create users (admin/member) and provision their
@@ -45,8 +46,7 @@ export function AdminPanel() {
   }, [refresh]);
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-8">
-      <h1 className="text-xl font-semibold text-text-primary">Admin</h1>
+    <div className="space-y-8">
       {error && <div className="text-sm text-danger">{error}</div>}
 
       <UsersSection users={users} onChange={refresh} />
@@ -55,6 +55,7 @@ export function AdminPanel() {
         mailboxes={mailboxes}
         onChange={refresh}
       />
+      <AgentAccessSection mailboxes={mailboxes} />
       <ProfileSection />
     </div>
   );
