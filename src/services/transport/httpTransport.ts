@@ -4,7 +4,7 @@
  *
  * Requests send credentials (the session cookie) so the server can enforce
  * per-user access (admin sees all; members see only their own accounts).
- * A 502 with `{ error }` from the server is turned back into a rejected promise,
+ * A 422 with `{ error }` from the server is turned back into a rejected promise,
  * matching how `invoke()` rejects on the desktop.
  */
 
