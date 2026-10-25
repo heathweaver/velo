@@ -1,5 +1,5 @@
 [workspace]
-members = ["velo-core", "velo-server"]
+members = ["velo-core", "velo-server", "velo-report"]
 
 [package]
 name = "velo"
