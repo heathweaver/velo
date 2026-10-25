@@ -59,7 +59,7 @@ Digest UI (later): top N highlights per newsletter in the reading pane / a Reads
 - Tables on the control DB: `filing_rules` (one per mailbox+sender, unique) and `filing_state` (per-mailbox INBOX high-water UID).
 - Behaviour (when enabled): every `VELO_FILER_INTERVAL` seconds (default 120) each provisioned mailbox's INBOX is checked for UIDs above the watermark (first sight only records the mark — no backfill). Headers are fetched with `BODY.PEEK` (not marked read); From addresses matching an enabled rule (case-insensitive exact address, or `@domain` wildcard) are **notified** to the owner (email from the admin mailbox, like the new-mail notifier; logged if no admin sender) and, after `VELO_FILER_NOTIFY_DELAY` seconds, **MOVEd** to Reads. Never deletes, never creates folders.
 - Reads resolution: top-level `Reads` preferred, else `INBOX.Reads` / `INBOX/Reads`; if neither exists, matches are skipped (logged).
-- Admin API (`/api/admin/filing-rules`): `GET` (`?mailboxId=`), `POST {mailboxId, senderEmail, action?, enabled?, notifyBefore?}`, `PATCH|PUT /:id`, `DELETE /:id`. Only action is `move_reads`.
+- Admin API (`/api/admin/filing-rules`): `GET` (`?mailboxId=`), `POST {mailboxId, senderEmail, action?, enabled?, notifyBefore?}`, `PATCH|PUT /:id`, `DELETE /:id`. Actions: `move_reads` and `move` (same- or cross-mailbox; see [cross-mailbox-filing.md](cross-mailbox-filing.md)).
 - MCP tools (later, over hosted velo-server HTTP): `newsletter_mark`, `newsletter_skim`, `list_filing_rules` — not in this slice.
 
 ---

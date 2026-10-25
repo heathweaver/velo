@@ -612,7 +612,8 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
                 "field": { "type": "string", "enum": ["from", "to", "subject"] },
                 "value": { "type": "string", "description": "Matches when the field contains this text (any case)" },
                 "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
-                "folder": { "type": "string", "description": "Destination folder; only for move" }
+                "folder": { "type": "string", "description": "Destination folder; only for move" },
+                "dest_mailbox": { "type": "string", "description": "Optional: id or email of ANOTHER mailbox this passphrase can use; the message is moved into its 'folder' (Apple Mail style: copied there, then removed here). Only for move" }
             }),
             &["mailbox", "name", "field", "value", "action"],
         ));
@@ -626,6 +627,7 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
                 "value": { "type": "string" },
                 "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
                 "folder": { "type": "string" },
+                "dest_mailbox": { "type": "string", "description": "Optional other mailbox (id or email) for move; omit for this mailbox" },
                 "enabled": { "type": "boolean" }
             }),
             &["mailbox", "rule_id", "name", "field", "value", "action"],
@@ -712,7 +714,18 @@ fn rule_args(args: &Value) -> Result<mail_rules::NewRule, String> {
         value: get("value").ok_or("Missing 'value'")?,
         action: get("action").ok_or("Missing 'action'")?,
         folder: get("folder"),
+        dest_mailbox_id: None, // resolved against the grant in run_tool
     })
+}
+
+/// Resolve the optional `dest_mailbox` argument; it must be a mailbox this
+/// passphrase is allowed to use.
+async fn rule_args_checked(state: &AppState, grant: &Grant, args: &Value) -> Result<mail_rules::NewRule, String> {
+    let mut r = rule_args(args)?;
+    if let Some(d) = args.get("dest_mailbox").and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty()) {
+        r.dest_mailbox_id = Some(pick_mailbox(state, grant, d).await.map_err(|_| "This passphrase cannot use that dest_mailbox".to_string())?.id);
+    }
+    Ok(r)
 }
 
 fn arg_strings(args: &Value, key: &str) -> Vec<String> {
@@ -782,13 +795,13 @@ async fn run_tool(
             Ok((json!(rules), format!("{n} rules")))
         }
         "create_rule" => {
-            let r = mail_rules::create(state, &creds.id, &grant.id, &rule_args(args)?).await?;
+            let r = mail_rules::create(state, &creds.id, &grant.id, &rule_args_checked(state, grant, args).await?).await?;
             Ok((json!(r), format!("{} {} -> {}", r.field, r.action, r.folder.as_deref().unwrap_or(""))))
         }
         "update_rule" => {
             let id = arg_str(args, "rule_id")?;
             let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-            let r = mail_rules::update(state, &creds.id, &id, &rule_args(args)?, enabled).await?;
+            let r = mail_rules::update(state, &creds.id, &id, &rule_args_checked(state, grant, args).await?, enabled).await?;
             Ok((json!(r), format!("updated {id}")))
         }
         "delete_rule" => {

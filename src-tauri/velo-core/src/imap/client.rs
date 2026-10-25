@@ -1304,6 +1304,10 @@ struct RawFetchedMessage {
     is_starred: bool,
     is_draft: bool,
     internal_date: Option<i64>,
+    /// Raw FLAGS list contents, e.g. `\Seen $Label1` (for faithful transfer).
+    flags_raw: String,
+    /// Raw INTERNALDATE string, e.g. `16-Feb-2026 12:00:00 +0000`.
+    internal_date_raw: Option<String>,
     body: Vec<u8>,
 }
 
@@ -1481,6 +1485,8 @@ async fn raw_parse_fetch_responses(
                         is_starred,
                         is_draft,
                         internal_date,
+                        flags_raw: flags_str.clone(),
+                        internal_date_raw: extract_internal_date_raw(&line),
                         body,
                     });
                 }
@@ -1517,12 +1523,16 @@ fn extract_flags_from_fetch(line: &str) -> String {
 /// Format: INTERNALDATE "16-Feb-2026 12:00:00 +0000"
 /// Returns None if not present — mail-parser will use the Date header instead.
 fn extract_internal_date(line: &str) -> Option<i64> {
+    // Parse "DD-Mon-YYYY HH:MM:SS +ZZZZ" manually
+    parse_imap_date(&extract_internal_date_raw(line)?)
+}
+
+/// The INTERNALDATE string exactly as the server sent it (without quotes).
+fn extract_internal_date_raw(line: &str) -> Option<String> {
     let idx = line.find("INTERNALDATE \"")?;
     let after = &line[idx + 14..];
     let end = after.find('"')?;
-    let date_str = &after[..end];
-    // Parse "DD-Mon-YYYY HH:MM:SS +ZZZZ" manually
-    parse_imap_date(date_str)
+    Some(after[..end].to_string())
 }
 
 /// Parse IMAP date format "16-Feb-2026 12:00:00 +0000" to Unix timestamp.
@@ -2159,6 +2169,8 @@ Content-Type: multipart/mixed; boundary=\"b1\"\r\n\
     }
 }
 
+
+pub mod transfer;
 
 /// Encode a string as an IMAP quoted-string (RFC 3501 §4.3), escaping `\` and `"`.
 pub(crate) fn imap_quote(s: &str) -> String {
