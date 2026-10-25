@@ -530,7 +530,7 @@ mod tests {
         );
         r.headers_mut().insert("cookie", jane.parse().unwrap());
         let (status, body, _) = send(&app, r).await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(body["error"].as_str().unwrap().contains("Not authorized"));
     }
 
