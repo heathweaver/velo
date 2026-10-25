@@ -12,6 +12,7 @@
  */
 
 import { getAllAccounts } from "../db/accounts";
+import { isEncrypted } from "../../utils/crypto";
 import { mapSecurity } from "../imap/imapConfigBuilder";
 import {
   createMailbox,
@@ -34,6 +35,13 @@ export async function migrateBrowserAccountsToServer(): Promise<string[]> {
     if (a.provider !== "imap" || a.auth_method !== "password") continue;
     if (!a.imap_host || !a.smtp_host || !a.imap_password) continue;
     if (onServer.has(a.email.toLowerCase())) continue;
+    // getAllAccounts hands back the stored value when it can't decrypt it (the
+    // key lives in this browser only). Uploading that would store ciphertext as
+    // the password, so leave the account alone and let it be re-entered.
+    if (isEncrypted(a.imap_password)) {
+      console.warn(`Not moving ${a.email}: its saved password can't be decrypted here`);
+      continue;
+    }
 
     try {
       await createMailbox({
