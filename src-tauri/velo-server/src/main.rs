@@ -25,6 +25,7 @@ mod profile;
 mod server_crypto;
 mod state;
 mod filer;
+mod mail_rules;
 mod seed;
 
 use axum::{routing::get, Router};
@@ -68,6 +69,9 @@ async fn main() {
 
     // Optional Reads filer (VELO_FILER=1). Default off.
     filer::spawn(state.clone());
+
+    // Agent- and admin-defined inbox rules, applied to new mail.
+    mail_rules::spawn(state.clone());
 
     let app = build_app(state);
 
@@ -884,6 +888,66 @@ mod tests {
         let r = call(&app, &token, "send_message", json!({ "mailbox": allowed, "to": ["a@b.com"], "subject": "s", "body": "b" })).await;
         assert_eq!(r["isError"], true);
         assert!(r["content"][0]["text"].as_str().unwrap().contains("read-only"));
+    }
+
+    #[tokio::test]
+    async fn agents_manage_inbox_rules_within_their_grant() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let other = create_mailbox(&app, &admin, &owner, "other@ex.com").await;
+        let (_, rw) = mint(&app, &admin, "read_send", true, vec![boxid.clone()], 3600).await;
+        let rw = rw["passphrase"].as_str().unwrap().to_string();
+        let (_, ro) = mint(&app, &admin, "read", true, vec![boxid.clone()], 3600).await;
+        let ro = ro["passphrase"].as_str().unwrap().to_string();
+
+        let names = tool_names(&app, &rw).await;
+        for t in ["list_rules", "create_rule", "update_rule", "delete_rule", "apply_rules", "create_folder"] {
+            assert!(names.contains(&t.to_string()), "{t} missing");
+        }
+        let ro_names = tool_names(&app, &ro).await;
+        assert!(ro_names.contains(&"list_rules".to_string()));
+        for t in ["create_rule", "update_rule", "delete_rule", "apply_rules", "create_folder"] {
+            assert!(!ro_names.contains(&t.to_string()), "{t} must be hidden from a read-only agent");
+        }
+        let denied = call(&app, &ro, "create_rule", json!({ "mailbox": boxid, "name": "n", "field": "from", "value": "x", "action": "star" })).await;
+        assert_eq!(denied["isError"], true);
+
+        // Bad rules are refused; delete is not an action.
+        for bad in [
+            json!({ "mailbox": boxid, "name": "n", "field": "from", "value": "x", "action": "delete" }),
+            json!({ "mailbox": boxid, "name": "n", "field": "from", "value": "x", "action": "move" }),
+            json!({ "mailbox": boxid, "name": "n", "field": "body", "value": "x", "action": "star" }),
+        ] {
+            assert_eq!(call(&app, &rw, "create_rule", bad).await["isError"], true);
+        }
+
+        let made = call(&app, &rw, "create_rule", json!({
+            "mailbox": boxid, "name": "Newsletters", "field": "from", "value": "news@", "action": "move", "folder": "Reads"
+        })).await;
+        assert_ne!(made["isError"], true, "{made}");
+        let rule: serde_json::Value = serde_json::from_str(made["content"][0]["text"].as_str().unwrap()).unwrap();
+        let rule_id = rule["id"].as_str().unwrap().to_string();
+
+        let listed = call(&app, &ro, "list_rules", json!({ "mailbox": boxid })).await;
+        assert!(listed["content"][0]["text"].as_str().unwrap().contains("Newsletters"));
+
+        // Another mailbox's rules are out of reach, and a rule id from one mailbox is not valid in another.
+        let r = call(&app, &rw, "list_rules", json!({ "mailbox": other })).await;
+        assert_eq!(r["isError"], true);
+
+        let off = call(&app, &rw, "update_rule", json!({
+            "mailbox": boxid, "rule_id": rule_id, "name": "Newsletters", "field": "from", "value": "news@",
+            "action": "move", "folder": "Reads", "enabled": false
+        })).await;
+        assert_ne!(off["isError"], true, "{off}");
+        assert!(off["content"][0]["text"].as_str().unwrap().contains("\"enabled\": false"));
+
+        let gone = call(&app, &rw, "delete_rule", json!({ "mailbox": boxid, "rule_id": rule_id })).await;
+        assert_ne!(gone["isError"], true);
+        let again = call(&app, &rw, "delete_rule", json!({ "mailbox": boxid, "rule_id": rule_id })).await;
+        assert_eq!(again["isError"], true);
     }
 
     #[tokio::test]

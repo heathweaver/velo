@@ -71,6 +71,7 @@ impl AppState {
         crate::profile::migrate(&mut conn).await;
         crate::notifier::migrate(&mut conn).await;
         crate::filer::migrate(&mut conn).await;
+        crate::mail_rules::migrate(&mut conn).await;
         crate::agent_access::migrate(&mut conn).await;
 
         let state = AppState {

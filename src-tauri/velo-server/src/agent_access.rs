@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 use velo_core::imap::scheduler::Priority;
 use velo_core::ops;
 
+use crate::mail_rules;
 use crate::mailboxes;
 use crate::state::{new_id, AppState, User};
 
@@ -565,6 +566,12 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
             &["mailbox"],
         ),
         tool(
+            "list_rules",
+            "List the inbox rules set up on a mailbox.",
+            json!({ "mailbox": mailbox }),
+            &["mailbox"],
+        ),
+        tool(
             "read_message",
             "Read one message: headers, text body and attachment names.",
             json!({ "mailbox": mailbox, "folder": folder, "uid": { "type": "integer" } }),
@@ -595,6 +602,51 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
                 "add": { "type": "boolean", "description": "true to set, false to clear" }
             }),
             &["mailbox", "folder", "uids", "flags", "add"],
+        ));
+        tools.push(tool(
+            "create_rule",
+            "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder, mark it read, or star it. Rules run on new mail and never delete.",
+            json!({
+                "mailbox": mailbox,
+                "name": { "type": "string", "description": "Short label for the rule" },
+                "field": { "type": "string", "enum": ["from", "to", "subject"] },
+                "value": { "type": "string", "description": "Matches when the field contains this text (any case)" },
+                "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
+                "folder": { "type": "string", "description": "Destination folder; only for move" }
+            }),
+            &["mailbox", "name", "field", "value", "action"],
+        ));
+        tools.push(tool(
+            "update_rule",
+            "Change an existing rule (give all its fields again) or switch it off with enabled=false.",
+            json!({
+                "mailbox": mailbox, "rule_id": { "type": "string" },
+                "name": { "type": "string" },
+                "field": { "type": "string", "enum": ["from", "to", "subject"] },
+                "value": { "type": "string" },
+                "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
+                "folder": { "type": "string" },
+                "enabled": { "type": "boolean" }
+            }),
+            &["mailbox", "rule_id", "name", "field", "value", "action"],
+        ));
+        tools.push(tool(
+            "delete_rule",
+            "Remove an inbox rule. Mail already filed stays where it is.",
+            json!({ "mailbox": mailbox, "rule_id": { "type": "string" } }),
+            &["mailbox", "rule_id"],
+        ));
+        tools.push(tool(
+            "apply_rules",
+            "Run the mailbox's rules over the newest messages already in a folder (default INBOX, up to 200).",
+            json!({ "mailbox": mailbox, "folder": folder, "limit": { "type": "integer" } }),
+            &["mailbox"],
+        ));
+        tools.push(tool(
+            "create_folder",
+            "Create a folder, for example one a rule will move mail into.",
+            json!({ "mailbox": mailbox, "folder": { "type": "string" } }),
+            &["mailbox", "folder"],
         ));
         tools.push(tool(
             "move_messages",
@@ -652,6 +704,17 @@ fn arg_uids(args: &Value) -> Result<Vec<u32>, String> {
     Ok(uids)
 }
 
+fn rule_args(args: &Value) -> Result<mail_rules::NewRule, String> {
+    let get = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
+    Ok(mail_rules::NewRule {
+        name: get("name").ok_or("Missing 'name'")?,
+        field: get("field").ok_or("Missing 'field'")?,
+        value: get("value").ok_or("Missing 'value'")?,
+        action: get("action").ok_or("Missing 'action'")?,
+        folder: get("folder"),
+    })
+}
+
 fn arg_strings(args: &Value, key: &str) -> Vec<String> {
     args.get(key)
         .and_then(Value::as_array)
@@ -661,8 +724,9 @@ fn arg_strings(args: &Value, key: &str) -> Vec<String> {
 
 async fn call_tool(state: &AppState, grant: &Grant, name: &str, args: &Value) -> Value {
     let kind = match name {
-        "list_mailboxes" | "list_folders" | "list_messages" | "read_message" => Kind::Read,
-        "send_message" | "move_messages" => Kind::Write,
+        "list_mailboxes" | "list_folders" | "list_messages" | "read_message" | "list_rules" => Kind::Read,
+        "send_message" | "move_messages" | "create_folder" | "create_rule" | "update_rule" | "delete_rule"
+        | "apply_rules" => Kind::Write,
         "set_flags" => flag_change_kind(&arg_strings(args, "flags"), args.get("add").and_then(Value::as_bool).unwrap_or(true)),
         "delete_messages" => Kind::Destructive,
         _ => return tool_error(&format!("Unknown tool '{name}'")),
@@ -689,7 +753,7 @@ async fn call_tool(state: &AppState, grant: &Grant, name: &str, args: &Value) ->
             return tool_error(&msg);
         }
     };
-    match run_tool(name, args, &creds).await {
+    match run_tool(state, grant, name, args, &creds).await {
         Ok((value, detail)) => {
             record(state, grant, name, Some(&creds.id), "ok", &detail).await;
             text_result(&value)
@@ -703,9 +767,49 @@ async fn call_tool(state: &AppState, grant: &Grant, name: &str, args: &Value) ->
 
 /// Run one permitted tool against a mailbox. Returns the result and a short,
 /// content-free note for the audit log.
-async fn run_tool(name: &str, args: &Value, creds: &mailboxes::MailboxCreds) -> Result<(Value, String), String> {
+async fn run_tool(
+    state: &AppState,
+    grant: &Grant,
+    name: &str,
+    args: &Value,
+    creds: &mailboxes::MailboxCreds,
+) -> Result<(Value, String), String> {
     let imap = creds.imap.clone();
     match name {
+        "list_rules" => {
+            let rules = mail_rules::list(state, &creds.id).await;
+            let n = rules.len();
+            Ok((json!(rules), format!("{n} rules")))
+        }
+        "create_rule" => {
+            let r = mail_rules::create(state, &creds.id, &grant.id, &rule_args(args)?).await?;
+            Ok((json!(r), format!("{} {} -> {}", r.field, r.action, r.folder.as_deref().unwrap_or(""))))
+        }
+        "update_rule" => {
+            let id = arg_str(args, "rule_id")?;
+            let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+            let r = mail_rules::update(state, &creds.id, &id, &rule_args(args)?, enabled).await?;
+            Ok((json!(r), format!("updated {id}")))
+        }
+        "delete_rule" => {
+            let id = arg_str(args, "rule_id")?;
+            mail_rules::delete(state, &creds.id, &id).await?;
+            Ok((json!({ "ok": true }), format!("deleted {id}")))
+        }
+        "apply_rules" => {
+            let folder = arg_str(args, "folder").unwrap_or_else(|_| "INBOX".to_string());
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
+            let out = mail_rules::apply_now(state, creds, &folder, limit).await?;
+            Ok((out.clone(), format!("{folder}: {out}")))
+        }
+        "create_folder" => {
+            let folder = arg_str(args, "folder")?;
+            if folder.chars().any(char::is_control) {
+                return Err("Invalid folder name".into());
+            }
+            ops::imap_create_folder(imap, folder.clone(), Priority::Interactive).await?;
+            Ok((json!({ "ok": true }), folder))
+        }
         "list_folders" => {
             let folders = ops::imap_list_folders(imap, Priority::Interactive).await?;
             let out: Vec<Value> = folders
