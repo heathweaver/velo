@@ -10,6 +10,7 @@ vi.mock("../auth/authService", () => ({
   listAllMailboxes: () => listAllMailboxes(),
   createMailbox: (i: unknown) => createMailbox(i),
 }));
+vi.mock("../../utils/crypto", () => ({ isEncrypted: (v: string) => v.includes(":") }));
 vi.mock("../db/accounts", () => ({ getAllAccounts: () => getAllAccounts() }));
 
 import { migrateBrowserAccountsToServer } from "./accountMigration";
@@ -64,6 +65,12 @@ describe("migrateBrowserAccountsToServer", () => {
       account({ id: "a3", provider: "gmail_api" }),
       account({ id: "a4", imap_password: "" }),
     ]);
+    expect(await migrateBrowserAccountsToServer()).toEqual([]);
+    expect(createMailbox).not.toHaveBeenCalled();
+  });
+
+  it("does not upload a password it could not decrypt", async () => {
+    getAllAccounts.mockResolvedValue([account({ imap_password: "AAAAAAAAAAAAAAAA:Zm9v" })]);
     expect(await migrateBrowserAccountsToServer()).toEqual([]);
     expect(createMailbox).not.toHaveBeenCalled();
   });
