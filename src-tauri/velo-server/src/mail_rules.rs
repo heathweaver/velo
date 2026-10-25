@@ -5,6 +5,10 @@
 //! - Rules belong to a server mailbox and are evaluated in creation order.
 //!   Every matching rule's flag actions apply; the first matching move wins.
 //! - Rules never delete mail. The only actions are `move`, `mark_read`, `star`.
+//! - A `move` may name `dest_mailbox_id` (another server mailbox): the message
+//!   is then transferred Apple-Mail style (APPEND to the destination folder,
+//!   then `\Deleted` + `UID EXPUNGE` of just that source UID; see
+//!   `transfer.rs`). Never forwarded, folders never created.
 //! - `apply_now` runs the rules over the newest messages already in a folder.
 //! - A background pass runs them over new INBOX mail every `POLL_SECS`. A
 //!   mailbox is only looked at once it has an enabled rule, and the first look
@@ -60,6 +64,11 @@ pub async fn migrate(conn: &mut SqliteConnection) {
     .execute(&mut *conn)
     .await
     .expect("create mail_rule_state table failed");
+
+    // Optional cross-mailbox destination (added later; ignore "duplicate column").
+    let _ = sqlx::query("ALTER TABLE mail_rules ADD COLUMN dest_mailbox_id TEXT")
+        .execute(&mut *conn)
+        .await;
 }
 
 #[derive(Clone, Debug, sqlx::FromRow, Serialize)]
@@ -75,6 +84,9 @@ pub struct Rule {
     pub enabled: i64,
     pub created_by: String,
     pub created_at: i64,
+    /// Destination mailbox for `move` (None = same mailbox).
+    #[sqlx(default)]
+    pub dest_mailbox_id: Option<String>,
 }
 
 fn as_bool<S: serde::Serializer>(v: &i64, s: S) -> Result<S::Ok, S::Error> {
@@ -106,11 +118,13 @@ pub struct Plan {
     pub mark_read: Vec<u32>,
     pub star: Vec<u32>,
     pub moves: BTreeMap<String, Vec<u32>>,
+    /// Cross-mailbox moves keyed by (destination mailbox id, folder).
+    pub transfers: BTreeMap<(String, String), Vec<u32>>,
 }
 
 impl Plan {
     pub fn is_empty(&self) -> bool {
-        self.mark_read.is_empty() && self.star.is_empty() && self.moves.is_empty()
+        self.mark_read.is_empty() && self.star.is_empty() && self.moves.is_empty() && self.transfers.is_empty()
     }
 }
 
@@ -125,7 +139,10 @@ pub fn plan(rules: &[Rule], msgs: &[ImapMessage]) -> Plan {
                 "star" if !m.is_starred && !p.star.contains(&m.uid) => p.star.push(m.uid),
                 "move" if !moved => {
                     if let Some(f) = r.folder.as_deref() {
-                        p.moves.entry(f.to_string()).or_default().push(m.uid);
+                        match r.dest_mailbox_id.as_deref().filter(|d| *d != r.mailbox_id) {
+                            Some(d) => p.transfers.entry((d.to_string(), f.to_string())).or_default().push(m.uid),
+                            None => p.moves.entry(f.to_string()).or_default().push(m.uid),
+                        }
                         moved = true;
                     }
                 }
@@ -144,6 +161,8 @@ pub struct NewRule {
     pub value: String,
     pub action: String,
     pub folder: Option<String>,
+    /// Cross-mailbox destination (already resolved and permission-checked).
+    pub dest_mailbox_id: Option<String>,
 }
 
 pub fn validate(r: &NewRule) -> Result<(), String> {
@@ -159,6 +178,9 @@ pub fn validate(r: &NewRule) -> Result<(), String> {
     }
     if r.name.trim().is_empty() || r.name.chars().count() > 100 {
         return Err("'name' must be 1-100 characters".into());
+    }
+    if r.dest_mailbox_id.is_some() && r.action != "move" {
+        return Err("'dest_mailbox' only applies to move rules".into());
     }
     match (r.action.as_str(), r.folder.as_deref().map(str::trim)) {
         ("move", None | Some("")) => Err("'folder' is required for a move rule".into()),
@@ -194,8 +216,8 @@ pub async fn create(state: &AppState, mailbox_id: &str, by: &str, r: &NewRule) -
     let id = new_id();
     let at = chrono_now();
     sqlx::query(
-        "INSERT INTO mail_rules (id, mailbox_id, name, field, value, action, folder, enabled, created_by, created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9)",
+        "INSERT INTO mail_rules (id, mailbox_id, name, field, value, action, folder, enabled, created_by, created_at, dest_mailbox_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10)",
     )
     .bind(&id)
     .bind(mailbox_id)
@@ -206,6 +228,7 @@ pub async fn create(state: &AppState, mailbox_id: &str, by: &str, r: &NewRule) -
     .bind(r.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()))
     .bind(by)
     .bind(at)
+    .bind(r.dest_mailbox_id.as_deref().filter(|d| *d != mailbox_id))
     .execute(&mut *c)
     .await
     .map_err(|e| e.to_string())?;
@@ -222,7 +245,7 @@ pub async fn update(state: &AppState, mailbox_id: &str, id: &str, r: &NewRule, e
     validate(r)?;
     let mut c = state.control.lock().await;
     let done = sqlx::query(
-        "UPDATE mail_rules SET name=$3, field=$4, value=$5, action=$6, folder=$7, enabled=$8 \
+        "UPDATE mail_rules SET name=$3, field=$4, value=$5, action=$6, folder=$7, enabled=$8, dest_mailbox_id=$9 \
          WHERE id=$1 AND mailbox_id=$2",
     )
     .bind(id)
@@ -233,6 +256,7 @@ pub async fn update(state: &AppState, mailbox_id: &str, id: &str, r: &NewRule, e
     .bind(&r.action)
     .bind(r.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()))
     .bind(enabled as i64)
+    .bind(r.dest_mailbox_id.as_deref().filter(|d| *d != mailbox_id))
     .execute(&mut *c)
     .await
     .map_err(|e| e.to_string())?;
@@ -271,7 +295,7 @@ fn chrono_now() -> i64 {
 // ---------- running ----------
 
 /// Carry out a plan. Flags first, then moves, so a message is marked before it leaves.
-pub async fn execute(creds: &MailboxCreds, folder: &str, p: &Plan, prio: Priority) -> Result<(), String> {
+pub async fn execute(state: &AppState, creds: &MailboxCreds, folder: &str, p: &Plan, prio: Priority) -> Result<(), String> {
     if !p.mark_read.is_empty() {
         ops::imap_set_flags(creds.imap.clone(), folder.into(), p.mark_read.clone(), vec!["\\Seen".into()], true, prio).await?;
     }
@@ -280,6 +304,17 @@ pub async fn execute(creds: &MailboxCreds, folder: &str, p: &Plan, prio: Priorit
     }
     for (dest, uids) in &p.moves {
         ops::imap_move_messages(creds.imap.clone(), folder.into(), uids.clone(), dest.clone(), prio).await?;
+    }
+    if !p.transfers.is_empty() {
+        let all = mailboxes::all_with_creds(state).await;
+        for ((dest_id, dest_folder), uids) in &p.transfers {
+            let dest = all.iter().find(|m| &m.id == dest_id).ok_or("Destination mailbox no longer exists")?;
+            let folders = ops::imap_list_folders(dest.imap.clone(), prio).await?;
+            let raw = crate::filer::resolve_folder(&folders, dest_folder)
+                .ok_or_else(|| format!("Folder '{dest_folder}' not found in {} (not created)", dest.email))?;
+            let out = crate::transfer::transfer_messages(state, creds, folder, uids, dest, &raw).await?;
+            tracing::info!("mail rules: {} → {}/{raw}: {out:?}", creds.email, dest.email);
+        }
     }
     Ok(())
 }
@@ -303,10 +338,10 @@ pub async fn apply_now(state: &AppState, creds: &MailboxCreds, folder: &str, lim
     uids.truncate(limit.clamp(1, MAX_APPLY));
     let msgs = headers(creds, folder, &uids, Priority::Interactive).await?;
     let p = plan(&rules, &msgs);
-    execute(creds, folder, &p, Priority::Interactive).await?;
+    execute(state, creds, folder, &p, Priority::Interactive).await?;
     Ok(json!({
         "checked": msgs.len(),
-        "moved": p.moves.values().map(Vec::len).sum::<usize>(),
+        "moved": p.moves.values().chain(p.transfers.values()).map(Vec::len).sum::<usize>(),
         "marked_read": p.mark_read.len(),
         "starred": p.star.len(),
     }))
@@ -375,7 +410,7 @@ async fn poll_mailbox(state: &AppState, mb: &MailboxCreds) -> Result<(), String>
         let p = plan(&rules, &msgs);
         if !p.is_empty() {
             // A failed move (e.g. folder missing) must not wedge the mailbox forever.
-            if let Err(e) = execute(mb, "INBOX", &p, Priority::Background).await {
+            if let Err(e) = execute(state, mb, "INBOX", &p, Priority::Background).await {
                 tracing::warn!("mail rules: {} could not apply a rule: {e}", mb.email);
             }
         }
@@ -400,6 +435,7 @@ mod tests {
             enabled: 1,
             created_by: "t".into(),
             created_at: 0,
+            dest_mailbox_id: None,
         }
     }
 
@@ -454,10 +490,10 @@ mod tests {
 
     #[test]
     fn validation() {
-        let ok = NewRule { name: "n".into(), field: "from".into(), value: "x".into(), action: "move".into(), folder: Some("Reads".into()) };
+        let ok = NewRule { name: "n".into(), field: "from".into(), value: "x".into(), action: "move".into(), folder: Some("Reads".into()), dest_mailbox_id: None };
         assert!(validate(&ok).is_ok());
         let bad = |f: &dyn Fn(&mut NewRule)| {
-            let mut r = NewRule { name: "n".into(), field: "from".into(), value: "x".into(), action: "move".into(), folder: Some("Reads".into()) };
+            let mut r = NewRule { name: "n".into(), field: "from".into(), value: "x".into(), action: "move".into(), folder: Some("Reads".into()), dest_mailbox_id: None };
             f(&mut r);
             validate(&r).is_err()
         };
@@ -467,5 +503,19 @@ mod tests {
         assert!(bad(&|r| r.folder = None));
         assert!(bad(&|r| { r.action = "star".into(); }));
         assert!(bad(&|r| r.name = "".into()));
+        assert!(bad(&|r| { r.action = "star".into(); r.folder = None; r.dest_mailbox_id = Some("other".into()); }));
+        assert!(!bad(&|r| r.dest_mailbox_id = Some("other".into())));
+    }
+
+    #[test]
+    fn plan_routes_cross_mailbox_moves_to_transfers() {
+        let mut x = rule("from", "boss@", "move", Some("INBOX"));
+        x.dest_mailbox_id = Some("me".into());
+        let mut same = rule("from", "self@", "move", Some("Reads"));
+        same.dest_mailbox_id = Some("m".into()); // own mailbox id → plain MOVE
+        let p = plan(&[x, same], &[msg(1, "boss@c.com", "a"), msg(2, "self@c.com", "b")]);
+        assert_eq!(p.transfers.get(&("me".to_string(), "INBOX".to_string())), Some(&vec![1]));
+        assert_eq!(p.moves.get("Reads"), Some(&vec![2]));
+        assert!(!p.is_empty());
     }
 }

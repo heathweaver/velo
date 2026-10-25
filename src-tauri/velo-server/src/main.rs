@@ -27,6 +27,7 @@ mod state;
 mod filer;
 mod mail_rules;
 mod seed;
+mod transfer;
 
 use axum::{routing::get, Router};
 use state::AppState;
@@ -689,6 +690,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filing_rules_cross_mailbox() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let uid = create_member(&app, &admin, "h@ex.com", "hpass12345").await;
+        let work = create_mailbox(&app, &admin, &uid, "work@ex.com").await;
+        let home = create_mailbox(&app, &admin, &uid, "home@ex.com").await;
+        let post = |body: Value| authed("POST", "/api/admin/filing-rules", &admin, Some(body));
+
+        // Single sender → other mailbox's INBOX (by email); action defaults to move, no notices.
+        let (s, r, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "boss@client.com",
+            "destMailbox": "home@ex.com", "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::CREATED, "{r}");
+        assert_eq!(r["action"], "move");
+        assert_eq!(r["destMailboxId"], home.as_str());
+        assert_eq!(r["destFolder"], "INBOX");
+        assert_eq!(r["notifyBefore"], false);
+        assert_eq!(r["matchAll"], false);
+
+        // Catch-all: must be explicit, and is created disabled unless enabled:true.
+        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "*",
+            "destMailbox": home, "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let (s, all, _) = send(&app, post(json!({ "mailboxId": work, "matchAll": true,
+            "destMailbox": home, "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::CREATED, "{all}");
+        assert_eq!(all["matchAll"], true);
+        assert_eq!(all["enabled"], false);
+        // Only one catch-all per mailbox.
+        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "matchAll": true,
+            "destMailbox": home, "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+
+        // Bad shapes: missing folder, move_reads with a destination, same-mailbox INBOX,
+        // catch-all on move_reads.
+        for bad in [
+            json!({ "mailboxId": work, "senderEmail": "a@b.com", "destMailbox": home }),
+            json!({ "mailboxId": work, "senderEmail": "a@b.com", "action": "move_reads", "destMailbox": home, "destFolder": "INBOX" }),
+            json!({ "mailboxId": work, "senderEmail": "a@b.com", "destMailbox": work, "destFolder": "INBOX" }),
+            json!({ "mailboxId": work, "matchAll": true, "action": "move_reads" }),
+        ] {
+            let (s, _, _) = send(&app, post(bad.clone())).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "a@b.com",
+            "destMailbox": "nobody@ex.com", "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // Loop guard (409): home → work INBOX for the same sender would ping-pong.
+        let (s, _, _) = send(&app, post(json!({ "mailboxId": home, "senderEmail": "boss@client.com",
+            "destMailbox": work, "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        // …and work's catch-all also blocks any home → work INBOX rule.
+        let (s, _, _) = send(&app, post(json!({ "mailboxId": home, "senderEmail": "x@y.com",
+            "destMailbox": work, "destFolder": "INBOX" }))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+
+        // Existing-style rule is unchanged.
+        let (s, old, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "news@x.com" }))).await;
+        assert_eq!(s, StatusCode::CREATED);
+        assert_eq!(old["action"], "move_reads");
+        assert!(old["destMailboxId"].is_null());
+
+        // PATCH keeps the destination when only toggling enabled.
+        let id = r["id"].as_str().unwrap();
+        let (s, upd, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
+            Some(json!({ "enabled": false })))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(upd["enabled"], false);
+        assert_eq!(upd["destMailboxId"], home.as_str());
+        assert_eq!(upd["destFolder"], "INBOX");
+    }
+
+    #[tokio::test]
     async fn filing_rules_admin_only() {
         let (app, _d) = test_app().await;
         let admin = login(&app, "admin@example.com", "admin-pass-123").await;
@@ -719,12 +793,12 @@ mod tests {
         let mut c = s2.control.lock().await;
         let n: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM sqlite_master WHERE name IN \
-             ('filing_rules','filing_state','idx_filing_rules_mailbox_sender')",
+             ('filing_rules','filing_state','idx_filing_rules_mailbox_sender','filing_transfers')",
         )
         .fetch_one(&mut *c)
         .await
         .unwrap();
-        assert_eq!(n.0, 3);
+        assert_eq!(n.0, 4);
     }
     // ---------- agent access (MCP passphrases) ----------
 
@@ -936,6 +1010,16 @@ mod tests {
         // Another mailbox's rules are out of reach, and a rule id from one mailbox is not valid in another.
         let r = call(&app, &rw, "list_rules", json!({ "mailbox": other })).await;
         assert_eq!(r["isError"], true);
+        // A cross-mailbox move may only target a mailbox this passphrase covers.
+        let r = call(&app, &rw, "create_rule", json!({
+            "mailbox": boxid, "name": "x", "field": "from", "value": "boss@", "action": "move",
+            "folder": "INBOX", "dest_mailbox": other
+        })).await;
+        assert_eq!(r["isError"], true, "{r}");
+        let r = call(&app, &rw, "create_rule", json!({
+            "mailbox": boxid, "name": "x", "field": "from", "value": "boss@", "action": "star", "dest_mailbox": boxid
+        })).await;
+        assert_eq!(r["isError"], true, "{r}");
 
         let off = call(&app, &rw, "update_rule", json!({
             "mailbox": boxid, "rule_id": rule_id, "name": "Newsletters", "field": "from", "value": "news@",
