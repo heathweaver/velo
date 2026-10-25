@@ -14,6 +14,7 @@ import { runMigrations } from "./services/db/migrations";
 import { getAllAccounts } from "./services/db/accounts";
 import { isWeb } from "./services/transport";
 import { syncProvisionedMailboxes } from "./services/web/mailboxBootstrap";
+import { migrateBrowserAccountsToServer } from "./services/web/accountMigration";
 import { readNotifyParam } from "./services/web/notifyDeepLink";
 import { getSetting } from "./services/db/settings";
 import {
@@ -336,6 +337,7 @@ export default function App() {
         // before reading them, so sync/compose work through the mailbox_id.
         if (isWeb()) {
           try {
+            await migrateBrowserAccountsToServer();
             await syncProvisionedMailboxes();
           } catch (err) {
             console.error("Failed to sync provisioned mailboxes:", err);
