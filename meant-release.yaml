@@ -1,0 +1,7 @@
+version: 1
+targets:
+  - key: production
+    label: Production server
+    dockerfile: Dockerfile
+    port: 8080
+    path: /api/health
