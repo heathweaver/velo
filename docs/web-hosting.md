@@ -130,3 +130,11 @@ only when deletion is not blocked. A read-only agent is not shown the others.
   can't change them).
 - ✅ **New-mail email notifications** with a one-click link back into the app.
 - Mail is IMAP/SMTP only (no Gmail OAuth), by design.
+
+### Inbox rules and organising (MCP)
+
+Agents with a read+send passphrase can also organise the inbox: `list_rules`, `create_rule`, `update_rule`, `delete_rule`, `apply_rules` and `create_folder`. A rule says "when from / to / subject contains some text, move to a folder, mark read, or star" (the basic Apple Mail set). Rules never delete mail. They run on new INBOX mail every two minutes once a mailbox has an enabled rule (the first pass only records where the inbox is, so nothing old is touched), and `apply_rules` runs them over the newest messages already in a folder. `list_rules` is available to read-only passphrases.
+
+### Accounts live on the server
+
+When an admin opens the web app, any IMAP account that was added only in that browser is uploaded to the server as a provisioned mailbox (the browser decrypts the password it holds), and the browser copy is replaced by the server-backed one. Agent passphrases can then be granted any of the accounts.

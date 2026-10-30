@@ -50,12 +50,12 @@ pub fn router(state: AppState) -> Router {
 fn ok<T: Serialize>(result: Result<T, String>) -> Response {
     match result {
         Ok(value) => Json(value).into_response(),
-        Err(msg) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response(),
+        Err(msg) => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": msg }))).into_response(),
     }
 }
 
 fn bad(msg: String) -> Response {
-    (StatusCode::BAD_GATEWAY, Json(json!({ "error": msg }))).into_response()
+    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": msg }))).into_response()
 }
 
 fn priority_of(label: &Option<String>) -> Priority {

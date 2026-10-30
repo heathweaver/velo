@@ -5,7 +5,7 @@ import type { ImapConfig, SmtpConfig } from "./tauriCommands";
  * Map the DB-stored security value to the config type.
  * DB stores 'ssl' but the config type uses 'tls'.
  */
-function mapSecurity(security: string | null): "tls" | "starttls" | "none" {
+export function mapSecurity(security: string | null): "tls" | "starttls" | "none" {
   if (!security) return "tls";
   const lower = security.toLowerCase();
   if (lower === "ssl" || lower === "tls") return "tls";
