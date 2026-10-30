@@ -1,0 +1,9 @@
+# Do not change this file without explicit instructions from the user.
+version: 1
+prod:
+  - source: package.json
+    name: "build"
+    category: build
+  - source: package.json
+    name: "test"
+    category: unit
