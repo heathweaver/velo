@@ -146,9 +146,23 @@ pub async fn imap_fetch_message_body(
     priority: Priority,
 ) -> Result<ImapMessage, String> {
     let (mut session, turn) = checkout(&config, priority).await?;
-    let message = imap_client::fetch_message_body(&mut session, &folder, uid).await?;
+    let result = imap_client::fetch_message_body(&mut session, &folder, uid).await;
     checkin(&config, session, turn).await;
-    Ok(message)
+    match result {
+        Ok(m) => Ok(m),
+        // Some servers make async-imap return an empty stream (or drop
+        // responses it cannot parse) even though the UID exists and listing
+        // works. Retry through the raw-TCP path that listing already uses.
+        Err(e) if e.starts_with("Message UID ") && e.contains(" not found in ") => {
+            log::warn!("{e}; retrying with raw TCP fetch");
+            let r = imap_client::raw_fetch_messages(&config, &folder, &uid.to_string(), false).await?;
+            r.messages
+                .into_iter()
+                .find(|m| m.uid == uid)
+                .ok_or(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub async fn imap_fetch_raw_message(
