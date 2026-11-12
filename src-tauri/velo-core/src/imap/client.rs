@@ -564,6 +564,18 @@ pub async fn create_folder(session: &mut ImapSession, folder: &str) -> Result<()
     }
 }
 
+/// Rename a folder (never deletes anything; the server moves its messages).
+pub async fn rename_folder(session: &mut ImapSession, from: &str, to: &str) -> Result<(), String> {
+    match tokio::time::timeout(IMAP_CMD_TIMEOUT, session.rename(from, to)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("RENAME {from} -> {to} failed: {e}")),
+        Err(_) => Err(format!(
+            "RENAME {from} -> {to} timed out after {}s — check your server settings or network connection",
+            IMAP_CMD_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// Move messages between folders.
 ///
 /// Tries MOVE first; falls back to COPY + flag Deleted + EXPUNGE, and confirms

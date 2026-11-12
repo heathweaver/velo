@@ -70,7 +70,6 @@ impl AppState {
         control_migrate(&mut conn).await;
         crate::profile::migrate(&mut conn).await;
         crate::notifier::migrate(&mut conn).await;
-        crate::filer::migrate(&mut conn).await;
         crate::transfer::migrate(&mut conn).await;
         crate::mail_rules::migrate(&mut conn).await;
         crate::agent_access::migrate(&mut conn).await;
