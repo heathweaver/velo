@@ -1,5 +1,7 @@
 # Headless sync service
 
+> **Revised scope (decision #18).** Velo is a headless mail service for agents. Reading and offline access stay with existing clients (Apple Mail, mobile apps) on the same IMAP accounts. The server already runs background pollers (`notifier.rs`, `filer.rs`, `mail_rules.rs`) and serves MCP against live IMAP, so no Rust sync engine or local mail copy is planned. Velo's web UI becomes a light client (`src/light`) that reads IMAP live through the server and keeps no copy in the browser. The sections below describe the earlier, larger plan and are kept for reference.
+
 Status: design, not built. Governed by Meant decisions #15, #16 and #17 (velo-email stream).
 
 ## Why
