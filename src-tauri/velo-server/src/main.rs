@@ -24,8 +24,9 @@ mod oauth_api;
 mod profile;
 mod server_crypto;
 mod state;
-mod filer;
 mod mail_rules;
+#[cfg(test)]
+mod imap_fixture;
 mod seed;
 mod transfer;
 
@@ -65,13 +66,10 @@ async fn main() {
     // Background: email users when new mail arrives in their mailbox.
     notifier::spawn(state.clone());
 
-    // Declarative mailbox + Reads rules seed (idempotent, never deletes).
+    // Declarative mailbox + rules seed (imported once per sender, never deletes).
     seed::import(&state).await;
 
-    // Optional Reads filer (VELO_FILER=1). Default off.
-    filer::spawn(state.clone());
-
-    // Agent- and admin-defined inbox rules, applied to new mail.
+    // The one rule system: agent-managed (and seeded) mail rules, applied to new mail.
     mail_rules::spawn(state.clone());
 
     let app = build_app(state);
@@ -111,11 +109,10 @@ fn build_app(state: AppState) -> Router {
         ));
 
     // Admin-only API: provisioned mailbox management + profile (display name /
-    // signature, global or per-user) + Reads filing rules.
+    // signature, global or per-user) + agent access.
     let admin_only = Router::new()
         .nest("/admin", mailboxes::admin_router(state.clone()))
         .nest("/admin", profile::admin_router(state.clone()))
-        .nest("/admin", filer::admin_router(state.clone()))
         .nest("/admin", agent_access::admin_router(state.clone()))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -601,188 +598,8 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
-    fn authed(method: &str, uri: &str, cookie: &str, body: Option<Value>) -> Request<Body> {
-        let b = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("cookie", cookie)
-            .header("content-type", "application/json");
-        match body {
-            Some(v) => b.body(Body::from(v.to_string())).unwrap(),
-            None => b.body(Body::empty()).unwrap(),
-        }
-    }
-
     #[tokio::test]
-    async fn filing_rules_crud() {
-        let (app, _d) = test_app().await;
-        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
-        let mark_id = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
-        let mb = create_mailbox(&app, &admin, &mark_id, "mark@ex.com").await;
-        let mb2 = create_mailbox(&app, &admin, &mark_id, "other@ex.com").await;
-
-        // Create with defaults; sender normalized to lowercase.
-        let (status, rule, _) = send(
-            &app,
-            authed("POST", "/api/admin/filing-rules", &admin,
-                Some(json!({ "mailboxId": mb, "senderEmail": "News@Letter.COM" }))),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(rule["senderEmail"], "news@letter.com");
-        assert_eq!(rule["action"], "move_reads");
-        assert_eq!(rule["enabled"], true);
-        assert_eq!(rule["notifyBefore"], true);
-        assert_eq!(rule["userId"], mark_id.as_str());
-        let id = rule["id"].as_str().unwrap().to_string();
-
-        // Duplicate → 409; bad action → 400; unknown mailbox → 404; bad sender → 400.
-        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
-            Some(json!({ "mailboxId": mb, "senderEmail": "news@letter.com" })))).await;
-        assert_eq!(s, StatusCode::CONFLICT);
-        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
-            Some(json!({ "mailboxId": mb, "senderEmail": "x@y.com", "action": "delete" })))).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
-            Some(json!({ "mailboxId": "nope", "senderEmail": "x@y.com" })))).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
-        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
-            Some(json!({ "mailboxId": mb, "senderEmail": "not-an-email" })))).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-
-        // Second mailbox rule (domain wildcard, disabled, no notify).
-        let (s, r2, _) = send(&app, authed("POST", "/api/admin/filing-rules", &admin,
-            Some(json!({ "mailboxId": mb2, "senderEmail": "@substack.com",
-                         "enabled": false, "notifyBefore": false })))).await;
-        assert_eq!(s, StatusCode::CREATED);
-        assert_eq!(r2["enabled"], false);
-        assert_eq!(r2["notifyBefore"], false);
-
-        // List all / filtered.
-        let (_, all, _) = send(&app, authed("GET", "/api/admin/filing-rules", &admin, None)).await;
-        assert_eq!(all.as_array().unwrap().len(), 2);
-        let (_, only, _) = send(&app, authed("GET",
-            &format!("/api/admin/filing-rules?mailboxId={mb}"), &admin, None)).await;
-        assert_eq!(only.as_array().unwrap().len(), 1);
-        assert_eq!(only[0]["id"], id.as_str());
-
-        // PATCH disable + change sender; PUT alias works too.
-        let (s, upd, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
-            Some(json!({ "enabled": false, "senderEmail": "Digest@Letter.com" })))).await;
-        assert_eq!(s, StatusCode::OK);
-        assert_eq!(upd["enabled"], false);
-        assert_eq!(upd["senderEmail"], "digest@letter.com");
-        assert_eq!(upd["notifyBefore"], true);
-        let (s, upd, _) = send(&app, authed("PUT", &format!("/api/admin/filing-rules/{id}"), &admin,
-            Some(json!({ "enabled": true })))).await;
-        assert_eq!(s, StatusCode::OK);
-        assert_eq!(upd["enabled"], true);
-        assert_eq!(upd["senderEmail"], "digest@letter.com");
-
-        // Delete, then 404s.
-        let (s, _, _) = send(&app, authed("DELETE", &format!("/api/admin/filing-rules/{id}"), &admin, None)).await;
-        assert_eq!(s, StatusCode::OK);
-        let (s, _, _) = send(&app, authed("DELETE", &format!("/api/admin/filing-rules/{id}"), &admin, None)).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
-        let (s, _, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
-            Some(json!({ "enabled": false })))).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn filing_rules_cross_mailbox() {
-        let (app, _d) = test_app().await;
-        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
-        let uid = create_member(&app, &admin, "h@ex.com", "hpass12345").await;
-        let work = create_mailbox(&app, &admin, &uid, "work@ex.com").await;
-        let home = create_mailbox(&app, &admin, &uid, "home@ex.com").await;
-        let post = |body: Value| authed("POST", "/api/admin/filing-rules", &admin, Some(body));
-
-        // Single sender → other mailbox's INBOX (by email); action defaults to move, no notices.
-        let (s, r, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "boss@client.com",
-            "destMailbox": "home@ex.com", "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::CREATED, "{r}");
-        assert_eq!(r["action"], "move");
-        assert_eq!(r["destMailboxId"], home.as_str());
-        assert_eq!(r["destFolder"], "INBOX");
-        assert_eq!(r["notifyBefore"], false);
-        assert_eq!(r["matchAll"], false);
-
-        // Catch-all: must be explicit, and is created disabled unless enabled:true.
-        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "*",
-            "destMailbox": home, "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST);
-        let (s, all, _) = send(&app, post(json!({ "mailboxId": work, "matchAll": true,
-            "destMailbox": home, "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::CREATED, "{all}");
-        assert_eq!(all["matchAll"], true);
-        assert_eq!(all["enabled"], false);
-        // Only one catch-all per mailbox.
-        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "matchAll": true,
-            "destMailbox": home, "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::CONFLICT);
-
-        // Bad shapes: missing folder, move_reads with a destination, same-mailbox INBOX,
-        // catch-all on move_reads.
-        for bad in [
-            json!({ "mailboxId": work, "senderEmail": "a@b.com", "destMailbox": home }),
-            json!({ "mailboxId": work, "senderEmail": "a@b.com", "action": "move_reads", "destMailbox": home, "destFolder": "INBOX" }),
-            json!({ "mailboxId": work, "senderEmail": "a@b.com", "destMailbox": work, "destFolder": "INBOX" }),
-            json!({ "mailboxId": work, "matchAll": true, "action": "move_reads" }),
-        ] {
-            let (s, _, _) = send(&app, post(bad.clone())).await;
-            assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
-        }
-        let (s, _, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "a@b.com",
-            "destMailbox": "nobody@ex.com", "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::NOT_FOUND);
-
-        // Loop guard (409): home → work INBOX for the same sender would ping-pong.
-        let (s, _, _) = send(&app, post(json!({ "mailboxId": home, "senderEmail": "boss@client.com",
-            "destMailbox": work, "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::CONFLICT);
-        // …and work's catch-all also blocks any home → work INBOX rule.
-        let (s, _, _) = send(&app, post(json!({ "mailboxId": home, "senderEmail": "x@y.com",
-            "destMailbox": work, "destFolder": "INBOX" }))).await;
-        assert_eq!(s, StatusCode::CONFLICT);
-
-        // Existing-style rule is unchanged.
-        let (s, old, _) = send(&app, post(json!({ "mailboxId": work, "senderEmail": "news@x.com" }))).await;
-        assert_eq!(s, StatusCode::CREATED);
-        assert_eq!(old["action"], "move_reads");
-        assert!(old["destMailboxId"].is_null());
-
-        // PATCH keeps the destination when only toggling enabled.
-        let id = r["id"].as_str().unwrap();
-        let (s, upd, _) = send(&app, authed("PATCH", &format!("/api/admin/filing-rules/{id}"), &admin,
-            Some(json!({ "enabled": false })))).await;
-        assert_eq!(s, StatusCode::OK);
-        assert_eq!(upd["enabled"], false);
-        assert_eq!(upd["destMailboxId"], home.as_str());
-        assert_eq!(upd["destFolder"], "INBOX");
-    }
-
-    #[tokio::test]
-    async fn filing_rules_admin_only() {
-        let (app, _d) = test_app().await;
-        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
-        create_member(&app, &admin, "mark@ex.com", "markpass123").await;
-        let mark = login(&app, "mark@ex.com", "markpass123").await;
-        let (s, _, _) = send(&app, authed("GET", "/api/admin/filing-rules", &mark, None)).await;
-        assert_eq!(s, StatusCode::FORBIDDEN);
-        let (s, _, _) = send(&app, authed("POST", "/api/admin/filing-rules", &mark,
-            Some(json!({ "mailboxId": "x", "senderEmail": "a@b.com" })))).await;
-        assert_eq!(s, StatusCode::FORBIDDEN);
-        let (s, _, _) = send(
-            &app,
-            Request::builder().uri("/api/admin/filing-rules").body(Body::empty()).unwrap(),
-        )
-        .await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn filer_migrate_is_idempotent() {
+    async fn control_migrate_is_idempotent() {
         let dir = std::env::temp_dir().join(format!("velo-test-{}", crate::state::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let control = dir.join("control.db");
@@ -793,7 +610,7 @@ mod tests {
         let mut c = s2.control.lock().await;
         let n: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM sqlite_master WHERE name IN \
-             ('filing_rules','filing_state','idx_filing_rules_mailbox_sender','filing_transfers')",
+             ('mail_rules','mail_rule_state','mail_rule_seeds','filing_transfers')",
         )
         .fetch_one(&mut *c)
         .await
@@ -1032,6 +849,71 @@ mod tests {
         assert_ne!(gone["isError"], true);
         let again = call(&app, &rw, "delete_rule", json!({ "mailbox": boxid, "rule_id": rule_id })).await;
         assert_eq!(again["isError"], true);
+    }
+
+    #[tokio::test]
+    async fn trash_rules_need_a_passphrase_that_may_delete() {
+        let (app, _d) = test_app().await;
+        let admin = login(&app, "admin@example.com", "admin-pass-123").await;
+        let owner = create_member(&app, &admin, "mark@ex.com", "markpass123").await;
+        let boxid = create_mailbox(&app, &admin, &owner, "mark@ex.com").await;
+        let token = |scope: &'static str, block: bool| {
+            let (app, admin, boxid) = (app.clone(), admin.clone(), boxid.clone());
+            async move {
+                let (_, m) = mint(&app, &admin, scope, block, vec![boxid], 3600).await;
+                m["passphrase"].as_str().unwrap().to_string()
+            }
+        };
+        let (read, blocked, open) = (token("read", false).await, token("read_send", true).await, token("read_send", false).await);
+
+        // Tool enumeration reflects the grant: only the open one is offered `trash`.
+        let trash_offered = |names: &Value| names.to_string().contains("\"trash\"");
+        for (t, expect) in [(&read, false), (&blocked, false), (&open, true)] {
+            let (_, v) = mcp(&app, Some(t), rpc(1, "tools/list", json!({}))).await;
+            let tools = v["result"]["tools"].as_array().unwrap();
+            let create = tools.iter().find(|x| x["name"] == "create_rule");
+            match create {
+                Some(c) => assert_eq!(trash_offered(&c["inputSchema"]["properties"]["action"]), expect),
+                None => assert!(!expect && t == &read),
+            }
+        }
+
+        let trash = json!({ "mailbox": boxid, "name": "Junk", "field": "subject", "value": "unsubscribe me", "action": "trash" });
+        for t in [&read, &blocked] {
+            let r = call(&app, t, "create_rule", trash.clone()).await;
+            assert_eq!(r["isError"], true, "{r}");
+        }
+        let made = call(&app, &open, "create_rule", trash.clone()).await;
+        assert_ne!(made["isError"], true, "{made}");
+        let rule: Value = serde_json::from_str(made["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(rule["action"], "trash");
+        assert!(rule["trash_authorized_by"].is_string());
+        let id = rule["id"].as_str().unwrap().to_string();
+
+        // A blocked passphrase can neither edit an existing Trash rule nor turn another rule into one.
+        let edit = |action: &str, rid: &str| json!({
+            "mailbox": boxid, "rule_id": rid, "name": "Junk", "field": "subject", "value": "unsubscribe me", "action": action, "enabled": true
+        });
+        assert_eq!(call(&app, &blocked, "update_rule", edit("star", &id)).await["isError"], true);
+        assert_eq!(call(&app, &blocked, "update_rule", edit("trash", &id)).await["isError"], true);
+        let star = call(&app, &blocked, "create_rule", json!({ "mailbox": boxid, "name": "S", "field": "from", "value": "x", "action": "star" })).await;
+        let star: Value = serde_json::from_str(star["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(call(&app, &blocked, "update_rule", edit("trash", star["id"].as_str().unwrap())).await["isError"], true);
+        // The delete-capable one can, and the authorisation is dropped when it stops being a Trash rule.
+        let ok = call(&app, &open, "update_rule", edit("star", &id)).await;
+        assert_ne!(ok["isError"], true, "{ok}");
+        assert!(ok["content"][0]["text"].as_str().unwrap().contains("\"trash_authorized_by\": null"));
+
+        // A plain move into a Trash folder is refused for everyone.
+        for t in [&blocked, &open] {
+            for f in ["Trash", "INBOX.Trash", "Deleted Items"] {
+                let r = call(&app, t, "create_rule", json!({ "mailbox": boxid, "name": "M", "field": "from", "value": "x", "action": "move", "folder": f })).await;
+                assert_eq!(r["isError"], true, "{f}: {r}");
+            }
+        }
+        // INBOX.Reads is stored as top-level Reads.
+        let r = call(&app, &blocked, "create_rule", json!({ "mailbox": boxid, "name": "R", "field": "from", "value": "n@", "action": "move", "folder": "INBOX.Reads" })).await;
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("\"folder\": \"Reads\""), "{r}");
     }
 
     #[tokio::test]

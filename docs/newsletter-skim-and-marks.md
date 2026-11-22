@@ -52,15 +52,15 @@ Digest UI (later): top N highlights per newsletter in the reading pane / a Reads
 
 ---
 
-## Server filer + later MCP
+## Server rules (one filer) + MCP
 
-`velo-server` has a **filer** module (`filer.rs`, off unless `VELO_FILER=1`):
+Velo has exactly one rule system: **mail rules** (`velo-server/src/mail_rules.rs`), managed over MCP (`list_rules`, `create_rule`, `update_rule`, `delete_rule`, `apply_rules`). The old sender-to-Reads filer (`filing_rules`, `VELO_FILER`) is gone; its rules and INBOX watermarks were converted into `mail_rules` / `mail_rule_state` in one transaction (IDs, enablement, destinations kept; `source = legacy_filer`) before the old tables were dropped.
 
-- Tables on the control DB: `filing_rules` (one per mailbox+sender, unique) and `filing_state` (per-mailbox INBOX high-water UID).
-- Behaviour (when enabled): every `VELO_FILER_INTERVAL` seconds (default 120) each provisioned mailbox's INBOX is checked for UIDs above the watermark (first sight only records the mark — no backfill). Headers are fetched with `BODY.PEEK` (not marked read); From addresses matching an enabled rule (case-insensitive exact address, or `@domain` wildcard) are **notified** to the owner (email from the admin mailbox, like the new-mail notifier; logged if no admin sender) and, after `VELO_FILER_NOTIFY_DELAY` seconds, **MOVEd** to Reads. Never deletes, never creates folders.
-- Reads resolution: top-level `Reads` preferred, else `INBOX.Reads` / `INBOX/Reads`; if neither exists, matches are skipped (logged).
-- Admin API (`/api/admin/filing-rules`): `GET` (`?mailboxId=`), `POST {mailboxId, senderEmail, action?, enabled?, notifyBefore?}`, `PATCH|PUT /:id`, `DELETE /:id`. Actions: `move_reads` and `move` (same- or cross-mailbox; see [cross-mailbox-filing.md](cross-mailbox-filing.md)).
-- MCP tools (later, over hosted velo-server HTTP): `newsletter_mark`, `newsletter_skim`, `list_filing_rules` — not in this slice.
+- A rule matches when `from`, `to` or `subject` contains some text. A catch-all is `from` containing `@`.
+- Actions: `move` to a folder in the same mailbox, `move` to a folder in another of the owner's mailboxes (copy into the target, then remove from the source — see [cross-mailbox-filing.md](cross-mailbox-filing.md)), `mark_read`, `star`, and `trash`. `trash` moves to the mailbox's Trash folder and is only offered to / accepted from a passphrase that may delete (read-and-send, deletion block off); the authorisation is stored on the rule so background runs continue. A plain `move` into a Trash folder is refused.
+- Rules run on new INBOX mail every 2 minutes once a mailbox has an enabled rule (the first look only records a watermark, no backfill); `apply_rules` runs them over existing mail.
+- **Reads is top level** (`Reads`, not `INBOX.Reads`) in every mailbox. On startup each mailbox's `INBOX.Reads` is renamed to `Reads` (or, when both exist, its mail is moved into `Reads` and the old folder is kept); a missing `Reads` is created. Nothing is filed until that succeeds, and failures are retried. No folder is ever deleted.
+- Seeds (`config/filing-seed.json`) insert into `mail_rules` once per mailbox + sender (ledger `mail_rule_seeds`), adopt an existing sender rule, and never undo an agent's edit, disable or deletion.
 
 ---
 

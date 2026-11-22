@@ -1,11 +1,15 @@
 //! Declarative filing seed (config/filing-seed.json, embedded at build time;
 //! override with VELO_SEED_FILE). Imported idempotently on startup:
 //! creates missing mailboxes (owned by the first admin), refreshes a mailbox's
-//! password from its `password_env` when that env var is set, and inserts
-//! missing Reads rules (notifyBefore = false), plus optional `transfer_rules`
-//! (move to a folder, possibly in another seeded mailbox). Transfer rules are
-//! inserted DISABLED unless `"enabled": true` is set; existing rules are never
-//! modified. Never deletes anything.
+//! password from its `password_env` when that env var is set, and imports the
+//! seed's rules into the single `mail_rules` table (so `list_rules` shows
+//! everything that runs): `reads_senders` become "from contains <sender> → move
+//! to Reads", and optional `transfer_rules` move to a folder, possibly in another
+//! seeded mailbox. Transfer rules are inserted DISABLED unless `"enabled": true`
+//! is set. Each mailbox/sender identity is imported once (ledger
+//! `mail_rule_seeds`): an existing sender rule — including a converted legacy
+//! one — is adopted rather than duplicated, and later edits, disabling or
+//! deletion by an agent are never undone. Never deletes anything.
 //!
 //! ```json
 //! "transfer_rules": [
@@ -16,7 +20,7 @@
 
 use serde::Deserialize;
 
-use crate::filer::{normalize_sender, validate_spec, RuleSpec, ACTION_MOVE, ACTION_MOVE_READS, CATCH_ALL};
+use crate::mail_rules::{normalize_sender, seed_rule, SeedRule, CATCH_ALL_SENDER, READS};
 use crate::server_crypto;
 use crate::state::{new_id, AppState};
 
@@ -107,8 +111,8 @@ async fn import_transfer_rules(state: &AppState, email: &str, rules: &[SeedTrans
     };
     let mut added = 0;
     for r in rules {
-        let sender = if r.sender.trim() == CATCH_ALL {
-            CATCH_ALL.to_string()
+        let sender = if r.sender.trim() == CATCH_ALL_SENDER {
+            CATCH_ALL_SENDER.to_string()
         } else {
             match normalize_sender(&r.sender) {
                 Ok(s) => s,
@@ -138,26 +142,19 @@ async fn import_transfer_rules(state: &AppState, email: &str, rules: &[SeedTrans
                 }
             }
         };
-        let spec = RuleSpec {
-            mailbox_id: id.clone(),
-            sender,
-            action: ACTION_MOVE.into(),
-            dest_mailbox_id: dest_id,
-            dest_folder: Some(r.dest_folder.trim().to_string()),
+        let rule = SeedRule {
+            mailbox_id: &id,
+            sender: &sender,
+            folder: r.dest_folder.trim(),
+            dest_mailbox_id: dest_id.as_deref(),
+            enabled: r.enabled,
+            created_by: &owner,
         };
-        if let Err(e) = validate_spec(&spec) {
-            tracing::warn!("seed: transfer rule for {email} invalid: {e}");
-            continue;
+        match seed_rule(&mut control, &rule).await {
+            Ok(true) => added += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!("seed: transfer rule for {email} invalid: {e}"),
         }
-        let res = sqlx::query(
-            "INSERT OR IGNORE INTO filing_rules (id, user_id, mailbox_id, sender_email, action, enabled, notify_before, dest_mailbox_id, dest_folder) \
-             VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8)",
-        )
-        .bind(new_id()).bind(&owner).bind(&spec.mailbox_id).bind(&spec.sender).bind(&spec.action)
-        .bind(r.enabled as i64).bind(&spec.dest_mailbox_id).bind(&spec.dest_folder)
-        .execute(&mut *control)
-        .await;
-        if let Ok(res) = res { added += res.rows_affected(); }
     }
     tracing::info!("seed: {email} — {added} new transfer rule(s), {} in seed", rules.len());
 }
@@ -234,14 +231,12 @@ async fn import_mailbox(state: &AppState, mb: SeedMailbox) {
             tracing::warn!("seed: bad sender {s}");
             continue;
         };
-        let r = sqlx::query(
-            "INSERT OR IGNORE INTO filing_rules (id, user_id, mailbox_id, sender_email, action, enabled, notify_before) \
-             VALUES ($1,$2,$3,$4,$5,1,0)",
-        )
-        .bind(new_id()).bind(&owner).bind(&id).bind(&sender).bind(ACTION_MOVE_READS)
-        .execute(&mut *control)
-        .await;
-        if let Ok(r) = r { added += r.rows_affected(); }
+        let rule = SeedRule { mailbox_id: &id, sender: &sender, folder: READS, dest_mailbox_id: None, enabled: true, created_by: &owner };
+        match seed_rule(&mut control, &rule).await {
+            Ok(true) => added += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!("seed: rule for {} invalid: {e}", mb.email),
+        }
     }
     tracing::info!("seed: {} — {added} new rule(s), {} in seed", mb.email, mb.reads_senders.len());
 }

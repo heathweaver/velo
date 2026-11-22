@@ -547,6 +547,9 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tool_list(grant: &Grant) -> Vec<Value> {
     let mailbox = json!({ "type": "string", "description": "Mailbox id or address from list_mailboxes" });
     let folder = json!({ "type": "string", "description": "Folder path, e.g. INBOX" });
+    // `trash` is only offered to a passphrase that may delete.
+    let can_delete = permits(grant, Kind::Destructive).is_ok();
+    let actions: Vec<&str> = mail_rules::ACTIONS.iter().copied().filter(|a| can_delete || *a != mail_rules::ACTION_TRASH).collect();
     let mut tools = vec![
         tool("list_mailboxes", "List the mailboxes this passphrase can use.", json!({}), &[]),
         tool(
@@ -567,7 +570,7 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
         ),
         tool(
             "list_rules",
-            "List the inbox rules set up on a mailbox.",
+            "List every inbox rule that runs on a mailbox (including seeded ones), with its action, folder and enabled state.",
             json!({ "mailbox": mailbox }),
             &["mailbox"],
         ),
@@ -605,15 +608,19 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
         ));
         tools.push(tool(
             "create_rule",
-            "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder, mark it read, or star it. Rules run on new mail and never delete.",
+            if can_delete {
+                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, star it, or move it to Trash (action trash). Rules run on new mail every 2 minutes and never permanently delete. The Reads folder is top level: 'Reads'."
+            } else {
+                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, or star it. Rules run on new mail every 2 minutes and never delete. The Reads folder is top level: 'Reads'."
+            },
             json!({
                 "mailbox": mailbox,
                 "name": { "type": "string", "description": "Short label for the rule" },
                 "field": { "type": "string", "enum": ["from", "to", "subject"] },
-                "value": { "type": "string", "description": "Matches when the field contains this text (any case)" },
-                "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
-                "folder": { "type": "string", "description": "Destination folder; only for move" },
-                "dest_mailbox": { "type": "string", "description": "Optional: id or email of ANOTHER mailbox this passphrase can use; the message is moved into its 'folder' (Apple Mail style: copied there, then removed here). Only for move" }
+                "value": { "type": "string", "description": "Matches when the field contains this text (any case). A 'from' value of '@' matches every sender." },
+                "action": { "type": "string", "enum": actions },
+                "folder": { "type": "string", "description": "Destination folder; only for move. Not a Trash folder." },
+                "dest_mailbox": { "type": "string", "description": "Optional: id or email of ANOTHER mailbox this passphrase can use; the message is moved into its 'folder' (copied there, then removed here). Only for move" }
             }),
             &["mailbox", "name", "field", "value", "action"],
         ));
@@ -625,7 +632,7 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
                 "name": { "type": "string" },
                 "field": { "type": "string", "enum": ["from", "to", "subject"] },
                 "value": { "type": "string" },
-                "action": { "type": "string", "enum": ["move", "mark_read", "star"] },
+                "action": { "type": "string", "enum": actions },
                 "folder": { "type": "string" },
                 "dest_mailbox": { "type": "string", "description": "Optional other mailbox (id or email) for move; omit for this mailbox" },
                 "enabled": { "type": "boolean" }
@@ -728,6 +735,11 @@ async fn rule_args_checked(state: &AppState, grant: &Grant, args: &Value) -> Res
     Ok(r)
 }
 
+/// The passphrase id to store on a trash rule — only when it may delete.
+fn trash_by(grant: &Grant) -> Option<&str> {
+    permits(grant, Kind::Destructive).ok().map(|_| grant.id.as_str())
+}
+
 fn arg_strings(args: &Value, key: &str) -> Vec<String> {
     args.get(key)
         .and_then(Value::as_array)
@@ -795,13 +807,13 @@ async fn run_tool(
             Ok((json!(rules), format!("{n} rules")))
         }
         "create_rule" => {
-            let r = mail_rules::create(state, &creds.id, &grant.id, &rule_args_checked(state, grant, args).await?).await?;
+            let r = mail_rules::create(state, &creds.id, &grant.id, &rule_args_checked(state, grant, args).await?, trash_by(grant)).await?;
             Ok((json!(r), format!("{} {} -> {}", r.field, r.action, r.folder.as_deref().unwrap_or(""))))
         }
         "update_rule" => {
             let id = arg_str(args, "rule_id")?;
             let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
-            let r = mail_rules::update(state, &creds.id, &id, &rule_args_checked(state, grant, args).await?, enabled).await?;
+            let r = mail_rules::update(state, &creds.id, &id, &rule_args_checked(state, grant, args).await?, enabled, trash_by(grant)).await?;
             Ok((json!(r), format!("updated {id}")))
         }
         "delete_rule" => {

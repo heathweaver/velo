@@ -230,6 +230,18 @@ pub async fn imap_create_folder(
     Ok(())
 }
 
+pub async fn imap_rename_folder(
+    config: ImapConfig,
+    from: String,
+    to: String,
+    priority: Priority,
+) -> Result<(), String> {
+    let (mut session, turn) = checkout(&config, priority).await?;
+    imap_client::rename_folder(&mut session, &from, &to).await?;
+    checkin(&config, session, turn).await;
+    Ok(())
+}
+
 pub async fn imap_move_messages(
     config: ImapConfig,
     folder: String,

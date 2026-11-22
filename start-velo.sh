@@ -19,7 +19,7 @@ if sudo docker ps --format '{{.Names}}' | grep -qx velo-server; then echo "velo-
 sudo docker rm -f velo-server >/dev/null 2>&1 || true
 sudo --preserve-env=DREAMHOST_ME_PASSWORD docker run -d --name velo-server --restart unless-stopped -p 8080:8080 \
   -v /workspace/velo-data:/data --env-file .local-admin.env \
-  -e VELO_PUBLIC_URL=http://localhost:8080 -e VELO_FILER=1 -e VELO_FILER_INTERVAL=120 -e VELO_NOTIFY=0 \
+  -e VELO_PUBLIC_URL=http://localhost:8080 -e VELO_NOTIFY=0 \
   -e DREAMHOST_ME_PASSWORD \
   velo-server:local
 echo "velo-server started on http://localhost:8080"
