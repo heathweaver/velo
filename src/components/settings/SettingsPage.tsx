@@ -37,6 +37,7 @@ import {
   ChevronDown,
   RotateCcw,
   type LucideIcon,
+  ChevronRight,
 } from "lucide-react";
 import { AdminPanel } from "@/components/admin/AdminPanel";
 import { useAuthStore } from "@/stores/authStore";
@@ -125,7 +126,12 @@ export function SettingsPage() {
   const isAdmin = useAuthStore((st) => st.user?.role === "admin");
   const visibleTabs = tabs.filter((t) => t.id !== "admin" || isAdmin);
   const activeTab = (tab && visibleTabs.some((t) => t.id === tab) ? tab : "general") as SettingsTab;
-  const setActiveTab = (t: SettingsTab) => navigateToSettings(t);
+  // Phones show the tab list first, then the chosen tab full-width (decision #19).
+  const [mobileList, setMobileList] = useState(!tab);
+  const setActiveTab = (t: SettingsTab) => {
+    setMobileList(false);
+    navigateToSettings(t);
+  };
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [undoSendDelay, setUndoSendDelay] = useState("5");
   const [clientId, setClientId] = useState("");
@@ -379,10 +385,17 @@ export function SettingsPage() {
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-bg-primary/50">
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-border-primary shrink-0 bg-bg-primary/60 backdrop-blur-sm">
+      <div className="flex items-center gap-3 px-4 md:px-5 py-3 border-b border-border-primary shrink-0 bg-bg-primary/60 backdrop-blur-sm">
+        <button
+          onClick={() => (mobileList ? navigateToLabel("inbox") : setMobileList(true))}
+          className="md:hidden p-2 -ml-2 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+          title={mobileList ? "Back to Inbox" : "All settings"}
+        >
+          <ArrowLeft size={20} />
+        </button>
         <button
           onClick={() => navigateToLabel("inbox")}
-          className="p-1.5 -ml-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+          className="hidden md:inline-flex p-1.5 -ml-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
           title="Back to Inbox"
         >
           <ArrowLeft size={18} />
@@ -393,7 +406,7 @@ export function SettingsPage() {
       {/* Body: sidebar nav + content */}
       <div className="flex flex-1 min-h-0">
         {/* Vertical tab sidebar */}
-        <nav className="w-48 border-r border-border-primary py-2 overflow-y-auto shrink-0 bg-bg-primary/30">
+        <nav className={`${mobileList ? "flex" : "hidden"} md:flex flex-col w-full md:w-48 md:border-r border-border-primary py-2 overflow-y-auto shrink-0 bg-bg-primary/30`}>
           {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -401,22 +414,23 @@ export function SettingsPage() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2.5 w-full px-4 py-2 text-[0.8125rem] transition-colors ${
-                  isActive
+                className={`flex items-center gap-3 md:gap-2.5 w-full px-4 py-3 md:py-2 text-sm md:text-[0.8125rem] transition-colors ${
+                  isActive && !mobileList
                     ? "bg-bg-selected text-accent font-medium"
                     : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 }`}
               >
                 <Icon size={15} className="shrink-0" />
-                {tab.label}
+                <span className="flex-1 text-left">{tab.label}</span>
+                <ChevronRight size={16} className="md:hidden text-text-tertiary" />
               </button>
             );
           })}
         </nav>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-2xl px-8 py-6">
+        <div className={`${mobileList ? "hidden" : "block"} md:block flex-1 min-w-0 overflow-y-auto`}>
+          <div className="max-w-2xl px-4 py-5 sm:px-8 sm:py-6">
             {/* Tab title */}
             {activeTabDef && (
               <div className="mb-6">
@@ -438,7 +452,7 @@ export function SettingsPage() {
                           setTheme(val);
                           setSetting("theme", val);
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="system">System</option>
                         <option value="light">Light</option>
@@ -451,7 +465,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setReadingPanePosition(e.target.value as "right" | "bottom" | "hidden");
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="right">Right</option>
                         <option value="bottom">Bottom</option>
@@ -464,7 +478,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setEmailDensity(e.target.value as "compact" | "default" | "spacious");
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="compact">Compact</option>
                         <option value="default">Default</option>
@@ -477,7 +491,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setFontScale(e.target.value as "small" | "default" | "large" | "xlarge");
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="small">Small</option>
                         <option value="default">Default</option>
@@ -526,7 +540,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setInboxViewMode(e.target.value as "unified" | "split");
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="unified">One combined list</option>
                         <option value="split">Split into category tabs</option>
@@ -581,7 +595,7 @@ export function SettingsPage() {
                             setPhishingSensitivity(val);
                             await setSetting("phishing_sensitivity", val);
                           }}
-                          className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                          className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                         >
                           <option value="low">Low (fewer warnings)</option>
                           <option value="default">Default</option>
@@ -627,7 +641,7 @@ export function SettingsPage() {
                           setCacheMaxMb(val);
                           await setSetting("attachment_cache_max_mb", val);
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="100">100 MB</option>
                         <option value="250">250 MB</option>
@@ -760,7 +774,7 @@ export function SettingsPage() {
                       <select
                         value={undoSendDelay}
                         onChange={(e) => handleUndoDelayChange(e.target.value)}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="5">5 seconds</option>
                         <option value="10">10 seconds</option>
@@ -782,7 +796,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setDefaultReplyMode(e.target.value as "reply" | "replyAll");
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="reply">Reply</option>
                         <option value="replyAll">Reply All</option>
@@ -794,7 +808,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setThreadSortOrder(e.target.value as ThreadSortOrder);
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="newest">Newest first</option>
                         <option value="oldest">Oldest first</option>
@@ -806,7 +820,7 @@ export function SettingsPage() {
                         onChange={(e) => {
                           setMarkAsReadBehavior(e.target.value as MarkAsReadBehavior);
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="delayed">
                           After {MARK_READ_DELAY_MS / 1000} seconds on screen
@@ -1075,7 +1089,7 @@ export function SettingsPage() {
                           // actually fetches it.
                           if (widening) setShowResyncPrompt(true);
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="30">Last 30 days</option>
                         <option value="90">Last 90 days</option>
@@ -1114,7 +1128,7 @@ export function SettingsPage() {
                           const { clearProviderClients } = await import("@/services/ai/providerManager");
                           clearProviderClients();
                         }}
-                        className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                        className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                       >
                         <option value="claude">Claude (Anthropic)</option>
                         <option value="openai">OpenAI</option>
@@ -1241,7 +1255,7 @@ export function SettingsPage() {
                               const { clearProviderClients } = await import("@/services/ai/providerManager");
                               clearProviderClients();
                             }}
-                            className="w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
+                            className="w-full sm:w-48 bg-bg-tertiary text-text-primary text-sm px-3 py-1.5 rounded-md border border-border-primary focus:border-accent outline-none"
                           >
                             {PROVIDER_MODELS[aiProvider].map((m) => (
                               <option key={m.id} value={m.id}>{m.label}</option>
@@ -2215,7 +2229,7 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <label className="text-sm text-text-secondary">{label}</label>
       {children}
     </div>
