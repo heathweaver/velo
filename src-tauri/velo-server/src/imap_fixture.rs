@@ -274,8 +274,11 @@ async fn serve(sock: TcpStream, srv: Arc<Mutex<Srv>>) {
                         let flags = t[5..].join(" ");
                         if let Some(msgs) = s.folders.get_mut(&selected) {
                             for m in msgs.iter_mut().filter(|m| in_set(&set, m.uid)) {
-                                if op.starts_with('+') && flags.contains("\\Deleted") && !m.flags.contains("\\Deleted") {
-                                    m.flags.push_str("\\Deleted ");
+                                for flag in flags.split_whitespace().map(|f| f.trim_matches(['(', ')'])) {
+                                    if op.starts_with('+') && !m.flags.split_whitespace().any(|f| f == flag) {
+                                        m.flags.push_str(flag);
+                                        m.flags.push(' ');
+                                    }
                                 }
                             }
                         }
@@ -291,14 +294,23 @@ async fn serve(sock: TcpStream, srv: Arc<Mutex<Srv>>) {
                         let set = arg(3);
                         let msgs = s.folders.get(&selected).cloned().unwrap_or_default();
                         for (i, m) in msgs.iter().enumerate().filter(|(_, m)| in_set(&set, m.uid)) {
+                            let headers_only = line.to_uppercase().contains("BODY.PEEK[HEADER]");
+                            let payload = if headers_only {
+                                let end = m.body.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4).unwrap_or(m.body.len());
+                                &m.body[..end]
+                            } else {
+                                &m.body[..]
+                            };
+                            let section = if headers_only { "HEADER" } else { "" };
                             out.push_str(&format!(
-                                "* {} FETCH (UID {} FLAGS ({}) INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[] {{{}}}\r\n",
+                                "* {} FETCH (UID {} FLAGS ({}) INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" RFC822.SIZE {} BODY[{section}] {{{}}}\r\n",
                                 i + 1,
                                 m.uid,
                                 m.flags.trim(),
-                                m.body.len()
+                                m.body.len(),
+                                payload.len()
                             ));
-                            out.push_str(&String::from_utf8_lossy(&m.body));
+                            out.push_str(&String::from_utf8_lossy(payload));
                             out.push_str(")\r\n");
                         }
                     }

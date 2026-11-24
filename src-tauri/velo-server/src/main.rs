@@ -805,6 +805,17 @@ mod tests {
         let denied = call(&app, &ro, "create_rule", json!({ "mailbox": boxid, "name": "n", "field": "from", "value": "x", "action": "star" })).await;
         assert_eq!(denied["isError"], true);
 
+        // Historic application stays a write operation and validates its scope
+        // before opening IMAP. Invalid options cannot silently narrow a backfill.
+        let denied = call(&app, &ro, "apply_rules", json!({ "mailbox": boxid, "all_history": true })).await;
+        assert_eq!(denied["isError"], true);
+        for bad in [
+            json!({ "mailbox": boxid, "all_history": "true" }),
+            json!({ "mailbox": boxid, "all_history": true, "limit": 200 }),
+        ] {
+            assert_eq!(call(&app, &rw, "apply_rules", bad).await["isError"], true);
+        }
+
         // Bad rules are refused; delete is not an action.
         for bad in [
             json!({ "mailbox": boxid, "name": "n", "field": "from", "value": "x", "action": "delete" }),

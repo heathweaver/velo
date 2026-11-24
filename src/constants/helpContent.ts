@@ -533,6 +533,18 @@ export const HELP_CATEGORIES: HelpCategory[] = [
         relatedSettingsTab: "mail-rules",
       },
       {
+        id: "agent-mail-filing",
+        icon: Filter,
+        title: "Agent-managed filing",
+        summary: "File new or existing mail across your mailboxes.",
+        description:
+          "Ask an agent connected to Velo to move matching mail into a folder in another of your mailboxes. Rules can match sender, recipient, or subject; you can leave existing mail where it is or ask the agent to apply your enabled rules to all existing messages in a source folder as well.",
+        tips: [
+          { text: "The agent's passphrase must cover both mailboxes, and the destination folder must already exist." },
+          { text: "Including existing mail applies all enabled rules in the selected source folder, not just the rule you added." },
+        ],
+      },
+      {
         id: "filters",
         icon: Filter,
         title: "Filters & rules",

@@ -19,7 +19,8 @@
 //!   `INBOX.Reads` folders are renamed (or merged into `Reads`, keeping the old
 //!   folder) by `ensure_reads`; rule polling waits for that to succeed.
 //! - A catch-all rule is `from` containing `@` (every sender address has one).
-//! - `apply_now` runs the rules over the newest messages already in a folder.
+//! - `apply_now` runs the rules over the newest messages already in a folder,
+//!   or every existing message when explicitly requested, in bounded batches.
 //! - A background pass runs them over new INBOX mail every `POLL_SECS`. A
 //!   mailbox is only looked at once it has an enabled rule, and the first look
 //!   only records a high-water mark (no surprise backfill).
@@ -868,6 +869,9 @@ pub async fn execute(state: &AppState, creds: &MailboxCreds, folder: &str, p: &P
                 let raw = checked_dest(&folders, dest_folder, &dest.email)?;
                 let out = crate::transfer::transfer_messages(state, creds, folder, uids, dest, &raw).await?;
                 tracing::info!("mail rules: {} → {}/{raw}: {out:?}", creds.email, dest.email);
+                if out.failed > 0 || out.flagged_only > 0 || out.missing > 0 {
+                    return Err(format!("Cross-mailbox move incomplete: {} failed, {} source copies only flagged, {} missing; completed moves are retained and transfers are journaled for retry", out.failed, out.flagged_only, out.missing));
+                }
                 Ok::<(), String>(())
             }
             .await;
@@ -892,8 +896,9 @@ async fn headers(creds: &MailboxCreds, folder: &str, uids: &[u32], prio: Priorit
     Ok(out)
 }
 
-/// Run the mailbox's rules over the newest `limit` messages in `folder`.
-pub async fn apply_now(state: &AppState, creds: &MailboxCreds, folder: &str, limit: usize) -> Result<Value, String> {
+/// Run the mailbox's rules over the newest `limit` messages, or all existing
+/// messages when `all_history` is true. New arrivals are outside this snapshot.
+pub async fn apply_now(state: &AppState, creds: &MailboxCreds, folder: &str, limit: usize, all_history: bool) -> Result<Value, String> {
     let rules = list(state, &creds.id).await;
     if rules.iter().all(|r| r.enabled == 0) {
         return Ok(json!({ "checked": 0, "moved": 0, "trashed": 0, "marked_read": 0, "starred": 0, "note": "No enabled rules" }));
@@ -901,16 +906,28 @@ pub async fn apply_now(state: &AppState, creds: &MailboxCreds, folder: &str, lim
     ensure_reads(state, creds, Priority::Interactive).await?;
     let mut uids = ops::imap_search_all_uids(creds.imap.clone(), folder.into(), Priority::Interactive).await?;
     uids.sort_unstable_by(|a, b| b.cmp(a));
-    uids.truncate(limit.clamp(1, MAX_APPLY));
-    let msgs = headers(creds, folder, &uids, Priority::Interactive).await?;
-    let p = plan(&rules, &msgs);
-    execute(state, creds, folder, &p, Priority::Interactive).await?;
+    if !all_history {
+        uids.truncate(limit.clamp(1, MAX_APPLY));
+    }
+    let (mut checked, mut moved, mut trashed, mut marked_read, mut starred) = (0, 0, 0, 0, 0);
+    // Snapshot UIDs before any moves. Repeating a newest-message query would
+    // revisit non-matches and flag-only matches, and could skip older mail.
+    for batch in uids.chunks(FETCH_CHUNK) {
+        let msgs = headers(creds, folder, batch, Priority::Interactive).await?;
+        let p = plan(&rules, &msgs);
+        execute(state, creds, folder, &p, Priority::Interactive).await?;
+        checked += msgs.len();
+        moved += p.moves.values().chain(p.transfers.values()).map(Vec::len).sum::<usize>();
+        trashed += p.trash.len();
+        marked_read += p.mark_read.len();
+        starred += p.star.len();
+    }
     Ok(json!({
-        "checked": msgs.len(),
-        "moved": p.moves.values().chain(p.transfers.values()).map(Vec::len).sum::<usize>(),
-        "trashed": p.trash.len(),
-        "marked_read": p.mark_read.len(),
-        "starred": p.star.len(),
+        "checked": checked,
+        "moved": moved,
+        "trashed": trashed,
+        "marked_read": marked_read,
+        "starred": starred,
     }))
 }
 
@@ -1312,7 +1329,90 @@ mod imap_tests {
     async fn state() -> AppState {
         let dir = std::env::temp_dir().join(format!("velo-imap-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
+        crate::server_crypto::init_key(&dir.join("velo-secret.key"));
         AppState::init(dir.join("c.db").to_str().unwrap(), dir.clone()).await
+    }
+
+    async fn provision(state: &AppState, mb: &MailboxCreds) {
+        let mut c = state.control.lock().await;
+        sqlx::query("INSERT OR IGNORE INTO users (id,email,role,password_hash) VALUES ('owner','owner@fx','member','unused')")
+            .execute(&mut *c).await.unwrap();
+        sqlx::query("INSERT INTO mailboxes (id,owner_user_id,email,imap_host,imap_port,imap_security,smtp_host,smtp_port,smtp_security,username,password_enc) VALUES ($1,'owner',$2,'127.0.0.1',$3,'none','127.0.0.1',1,'none','u',$4)")
+            .bind(&mb.id).bind(&mb.email).bind(mb.imap.port as i64).bind(crate::server_crypto::encrypt("p"))
+            .execute(&mut *c).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_history_moves_old_matches_across_mailboxes_and_preserves_non_matches() {
+        let st = state().await;
+        let bodies = (0..225).map(|i| message(&format!("old-{i}"), "news@fx", if i % 2 == 0 { "file this" } else { "keep" })).collect();
+        let src = Fixture::start(&[("INBOX", bodies), ("Reads", vec![])]).await;
+        let dest = Fixture::start(&[("Filed", vec![])]).await;
+        let (mb, target) = (src.creds("src"), dest.creds("target"));
+        provision(&st, &target).await;
+        create(&st, &mb.id, "test", &NewRule {
+            name: "File by subject".into(), field: "subject".into(), value: "file this".into(),
+            action: "move".into(), folder: Some("Filed".into()), dest_mailbox_id: Some(target.id.clone()),
+        }, None).await.unwrap();
+        // Creation alone never moves old mail.
+        assert_eq!(src.count("INBOX"), Some(225));
+        let limited = apply_now(&st, &mb, "INBOX", 400, false).await.unwrap();
+        assert_eq!(limited["checked"], 200);
+        assert_eq!(limited["moved"], 100);
+        // Snapshot includes remaining non-matches and matches older than the cap.
+        let all = apply_now(&st, &mb, "INBOX", 1, true).await.unwrap();
+        assert_eq!(all["checked"], 125);
+        assert_eq!(all["moved"], 13);
+        assert_eq!(src.count("INBOX"), Some(112));
+        assert_eq!(dest.count("Filed"), Some(113));
+        let again = apply_now(&st, &mb, "INBOX", 1, true).await.unwrap();
+        assert_eq!(again["checked"], 112);
+        assert_eq!(again["moved"], 0);
+        assert_eq!(dest.count("Filed"), Some(113));
+    }
+
+    #[tokio::test]
+    async fn all_history_checks_every_message_and_reuses_flag_rules() {
+        let st = state().await;
+        let bodies = (0..225).map(|i| message(&format!("flag-{i}"), "news@fx", "hello")).collect();
+        let src = Fixture::start(&[("Archive", bodies), ("INBOX", vec![]), ("Reads", vec![])]).await;
+        let mb = src.creds("flags");
+        for action in ["star", "mark_read"] {
+            create(&st, &mb.id, "test", &NewRule {
+                name: action.into(), field: "to".into(), value: "me@fx".into(),
+                action: action.into(), folder: None, dest_mailbox_id: None,
+            }, None).await.unwrap();
+        }
+        let out = apply_now(&st, &mb, "Archive", 1, true).await.unwrap();
+        assert_eq!(out["checked"], 225);
+        assert_eq!(out["starred"], 225);
+        assert_eq!(out["marked_read"], 225);
+        assert_eq!(src.count("Archive"), Some(225));
+        let srv = src.srv.lock().unwrap();
+        assert!(srv.folders["Archive"].iter().all(|m| m.flags.contains("Seen") && m.flags.contains("Flagged")));
+    }
+
+    #[tokio::test]
+    async fn all_history_reports_transfer_failure_and_can_retry() {
+        let st = state().await;
+        let src = Fixture::start(&[("INBOX", vec![message("failure", "news@fx", "file")]), ("Reads", vec![])]).await;
+        let dest = Fixture::start(&[("Filed", vec![])]).await;
+        let (mb, target) = (src.creds("failure-src"), dest.creds("failure-dest"));
+        provision(&st, &target).await;
+        create(&st, &mb.id, "test", &NewRule {
+            name: "News".into(), field: "from".into(), value: "news@fx".into(),
+            action: "move".into(), folder: Some("Filed".into()), dest_mailbox_id: Some(target.id.clone()),
+        }, None).await.unwrap();
+        dest.srv.lock().unwrap().fail_append = true;
+        let err = apply_now(&st, &mb, "INBOX", 1, true).await.unwrap_err();
+        assert!(err.contains("1 failed"), "{err}");
+        assert_eq!(src.count("INBOX"), Some(1));
+        assert_eq!(dest.count("Filed"), Some(0));
+        dest.srv.lock().unwrap().fail_append = false;
+        let out = apply_now(&st, &mb, "INBOX", 1, true).await.unwrap();
+        assert_eq!(out["moved"], 1);
+        assert_eq!(src.count("INBOX"), Some(0));
+        assert_eq!(dest.count("Filed"), Some(1));
     }
 
     async fn migrated(state: &AppState, id: &str) -> bool {

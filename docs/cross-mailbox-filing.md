@@ -28,6 +28,35 @@ and a `dest_mailbox` (id or email) that the passphrase is granted:
 - A move into a Trash folder is refused; use the `trash` action (needs a passphrase that may delete).
 - A missing destination folder is an error; nothing is created and the source stays put.
 
+## New mail or all existing mail
+
+Creating a rule leaves historic mail untouched. Enabled rules run on new INBOX
+mail every two minutes; the first background pass records the current watermark.
+All existing criteria (`from`, `to`, `subject`, case-insensitive contains) also
+work with cross-mailbox moves.
+
+To include **all existing mail**, create the rule, then call `apply_rules`:
+
+```json
+{ "mailbox": "work@example.com", "folder": "INBOX", "all_history": true }
+```
+
+This applies all enabled rules in their usual order, including flag actions and
+the first matching move, to every message in that source folder. Repeat for other
+source folders as needed. UIDs are snapshotted once; messages arriving afterwards
+are left for the background pass. Headers and actions run in batches of 100,
+without the normal 200-message cap. No new rule system or extra UI is involved.
+
+Omit `all_history` (or set it to `false`) for the existing bounded operation:
+`limit` defaults to 100 and is clamped to 1–200. `all_history: true` and `limit`
+cannot be combined. The response totals `checked`, `moved`, `trashed`,
+`marked_read`, and `starred` across batches.
+
+An incomplete transfer returns an error and stops subsequent batches. Earlier
+successful moves remain completed; failed APPENDs leave the source untouched.
+Transfers are journaled so the same call can be retried. A source that lacks
+UIDPLUS is reported as incomplete when it can only flag a source copy for deletion.
+
 ## Seed file (`filing-seed.json`)
 
 Per mailbox, optional and imported **disabled** unless `"enabled": true`, once per mailbox + sender:

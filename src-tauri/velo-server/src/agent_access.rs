@@ -609,9 +609,9 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
         tools.push(tool(
             "create_rule",
             if can_delete {
-                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, star it, or move it to Trash (action trash). Rules run on new mail every 2 minutes and never permanently delete. The Reads folder is top level: 'Reads'."
+                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, star it, or move it to Trash (action trash). Rules run on new mail every 2 minutes and never permanently delete. The Reads folder is top level: 'Reads'. To include existing mail, then call apply_rules with all_history=true and the source folder."
             } else {
-                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, or star it. Rules run on new mail every 2 minutes and never delete. The Reads folder is top level: 'Reads'."
+                "Add an inbox rule: when a message's from/to/subject contains some text, move it to a folder (in this or another of your mailboxes), mark it read, or star it. Rules run on new mail every 2 minutes and never delete. The Reads folder is top level: 'Reads'. To include existing mail, then call apply_rules with all_history=true and the source folder."
             },
             json!({
                 "mailbox": mailbox,
@@ -647,8 +647,8 @@ fn tool_list(grant: &Grant) -> Vec<Value> {
         ));
         tools.push(tool(
             "apply_rules",
-            "Run the mailbox's rules over the newest messages already in a folder (default INBOX, up to 200).",
-            json!({ "mailbox": mailbox, "folder": folder, "limit": { "type": "integer" } }),
+            "Run enabled rules (including cross-mailbox moves) on existing mail in a source folder (default INBOX). By default checks the newest 100 messages, capped at 200. Set all_history=true to check every existing message, with no limit; new arrivals remain handled by background rules. An error may follow partially completed moves; transfers are journaled for retries.",
+            json!({ "mailbox": mailbox, "folder": folder, "limit": { "type": "integer", "description": "Newest messages to check (1–200, default 100). Cannot combine with all_history=true." }, "all_history": { "type": "boolean", "description": "Check every existing message in this folder, including mail older than the newest 200. Defaults to false." } }),
             &["mailbox"],
         ));
         tools.push(tool(
@@ -824,7 +824,15 @@ async fn run_tool(
         "apply_rules" => {
             let folder = arg_str(args, "folder").unwrap_or_else(|_| "INBOX".to_string());
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
-            let out = mail_rules::apply_now(state, creds, &folder, limit).await?;
+            let all_history = match args.get("all_history") {
+                None => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return Err("all_history must be a boolean".into()),
+            };
+            if all_history && args.get("limit").is_some() {
+                return Err("Choose all_history=true or limit, not both".into());
+            }
+            let out = mail_rules::apply_now(state, creds, &folder, limit, all_history).await?;
             Ok((out.clone(), format!("{folder}: {out}")))
         }
         "create_folder" => {
@@ -1051,6 +1059,16 @@ mod tests {
         assert!(!blocked.contains(&"delete_messages".to_string()));
         let open = names(&grant(SCOPE_READ_SEND, false));
         assert!(open.contains(&"delete_messages".to_string()));
+    }
+
+    #[test]
+    fn historic_rule_application_is_discoverable_to_write_grants() {
+        let tools = tool_list(&grant(SCOPE_READ_SEND, true));
+        let apply = tools.iter().find(|t| t["name"] == "apply_rules").unwrap();
+        assert_eq!(apply["inputSchema"]["properties"]["all_history"]["type"], "boolean");
+        assert_eq!(apply["inputSchema"]["required"], json!(["mailbox"]));
+        let create = tools.iter().find(|t| t["name"] == "create_rule").unwrap();
+        assert!(create["description"].as_str().unwrap().contains("all_history=true"));
     }
 
     #[test]

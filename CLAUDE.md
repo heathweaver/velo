@@ -211,6 +211,7 @@ Key tables (37 total): `accounts` (with `provider` "gmail_api"|"imap", IMAP/SMTP
 - **Dev port**: Override with `npm run tauri dev -- --port <n>` or `VELO_DEV_PORT=<n>` (wrapper syncs Vite + Tauri `devUrl`)
 - **Vite build**: Multi-page — `index.html` (main app) + `splashscreen.html`
 - **Filter engine**: AND logic for criteria, merges actions when multiple filters match same message
+- **Server MCP rules**: `velo-server/src/mail_rules.rs` owns agent-managed rules, including cross-mailbox moves. `create_rule` affects new INBOX mail; `apply_rules` with `all_history: true` explicitly applies enabled rules to every existing message in a source folder using 100-message batches (otherwise newest 100, capped at 200). Incomplete transfers return errors and retain the transfer journal for retry.
 - **AI providers**: API keys stored in SQLite settings table. Provider selected per-feature in settings. Results cached in `ai_cache` table
 - **Deep links**: `mailto:` scheme registered via tauri-plugin-deep-link. Opens compose window with pre-filled recipient
 - **Autostart**: Uses `--hidden` flag to start minimized to tray
