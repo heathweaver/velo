@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Outlet } from "@tanstack/react-router";
+import { Outlet, useRouterState } from "@tanstack/react-router";
 import { Sidebar } from "./components/layout/Sidebar";
 import { AddAccount } from "./components/accounts/AddAccount";
 import { Composer } from "./components/composer/Composer";
@@ -108,6 +108,8 @@ export default function App() {
   const colorTheme = useUIStore((s) => s.colorTheme);
   const reduceMotion = useUIStore((s) => s.reduceMotion);
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed);
+  // Phones: Settings takes the whole screen; it has its own back navigation.
+  const onSettings = useRouterState({ select: (st) => st.location.pathname.startsWith("/settings") });
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -607,7 +609,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden text-text-primary">
+    <div className="flex flex-col h-dvh overflow-hidden text-text-primary">
       <OfflineBanner />
       {/* Animated gradient blobs for glassmorphism effect */}
       <div className="animated-bg" aria-hidden="true">
@@ -620,12 +622,14 @@ export default function App() {
       <TitleBar />
       <div className="flex flex-1 min-w-0 overflow-hidden">
         <DndProvider>
-          <ErrorBoundary name="Sidebar">
-            <Sidebar
-              collapsed={sidebarCollapsed}
-              onAddAccount={() => setShowAddAccount(true)}
-            />
-          </ErrorBoundary>
+          <div className={onSettings ? "hidden md:contents" : "contents"}>
+            <ErrorBoundary name="Sidebar">
+              <Sidebar
+                collapsed={sidebarCollapsed}
+                onAddAccount={() => setShowAddAccount(true)}
+              />
+            </ErrorBoundary>
+          </div>
           <Outlet />
         </DndProvider>
       </div>

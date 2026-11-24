@@ -57,6 +57,8 @@ export function LightApp() {
   const [open, setOpen] = useState<Msg | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Phones show one pane at a time (decision #19); md+ shows all three.
+  const [showFolders, setShowFolders] = useState(false);
 
   useEffect(() => {
     listMailboxes()
@@ -130,14 +132,19 @@ export function LightApp() {
     }
   };
 
+  const pane = open ? "message" : showFolders ? "folders" : "list";
+  const vis = (p: typeof pane, desktop: string) => `${pane === p ? "flex" : "hidden"} md:flex ${desktop}`;
+  const folderName = folders.find((f) => f.path === folder)?.name ?? folder;
+  const btn = "px-3 py-2 md:px-2 md:py-1 rounded bg-bg-secondary hover:bg-bg-hover";
+
   const archive = findFolder(folders, "\\Archive", /^archive/i);
   const trash = findFolder(folders, "\\Trash", /^(trash|deleted)/i);
 
   return (
-    <div className="flex h-screen bg-bg-primary text-text-primary text-sm">
-      <aside className="w-56 shrink-0 border-r border-border-primary overflow-y-auto p-2 space-y-1">
+    <div className="flex h-dvh bg-bg-primary text-text-primary text-sm">
+      <aside className={vis("folders", "flex-col w-full md:w-56 shrink-0 md:border-r border-border-primary overflow-y-auto p-2 gap-1")}>
         <select
-          className="w-full bg-bg-secondary rounded p-1"
+          className="w-full bg-bg-secondary rounded p-2 md:p-1"
           value={mailboxId ?? ""}
           onChange={(e) => {
             setFolder("INBOX");
@@ -153,8 +160,11 @@ export function LightApp() {
         {folders.map((f) => (
           <button
             key={f.path}
-            onClick={() => setFolder(f.path)}
-            className={`w-full text-left px-2 py-1 rounded flex justify-between ${
+            onClick={() => {
+              setFolder(f.path);
+              setShowFolders(false);
+            }}
+            className={`w-full text-left px-3 py-2.5 md:px-2 md:py-1 rounded flex justify-between ${
               f.path === folder ? "bg-bg-selected" : "hover:bg-bg-hover"
             }`}
           >
@@ -162,15 +172,22 @@ export function LightApp() {
             {f.unseen > 0 && <span className="text-text-secondary">{f.unseen}</span>}
           </button>
         ))}
-        <a href="/?classic=1" className="block px-2 py-1 text-text-tertiary hover:underline">
+        <a href="/?classic=1" className="block px-3 py-2.5 md:px-2 md:py-1 text-text-tertiary hover:underline">
           Settings
         </a>
       </aside>
 
-      <section className="w-96 shrink-0 border-r border-border-primary overflow-y-auto">
-        <div className="flex items-center justify-between p-2 border-b border-border-primary">
-          <span className="font-medium">{folder}</span>
-          <button className="px-2 py-0.5 rounded hover:bg-bg-hover" onClick={() => void load(true)}>
+      <section className={vis("list", "flex-col w-full md:w-80 lg:w-96 shrink-0 md:border-r border-border-primary overflow-y-auto")}>
+        <div className="sticky top-0 bg-bg-primary flex items-center justify-between gap-2 p-2 border-b border-border-primary">
+          <button
+            className="md:hidden px-3 py-2 rounded hover:bg-bg-hover"
+            onClick={() => setShowFolders(true)}
+            aria-label="Folders"
+          >
+            ☰
+          </button>
+          <span className="font-medium truncate flex-1">{folderName}</span>
+          <button className="px-3 py-2 md:px-2 md:py-0.5 rounded hover:bg-bg-hover" onClick={() => void load(true)}>
             Refresh
           </button>
         </div>
@@ -179,7 +196,7 @@ export function LightApp() {
           <button
             key={m.uid}
             onClick={() => void openMessage(m)}
-            className={`w-full text-left px-3 py-2 border-b border-border-secondary ${
+            className={`w-full shrink-0 text-left px-3 py-3 md:py-2 border-b border-border-secondary ${
               open?.uid === m.uid ? "bg-bg-selected" : "hover:bg-bg-hover"
             }`}
           >
@@ -206,18 +223,21 @@ export function LightApp() {
         )}
       </section>
 
-      <main className="flex-1 flex flex-col min-w-0">
+      <main className={vis("message", "flex-1 flex-col min-w-0")}>
         {open && mailboxId ? (
           <>
             <div className="p-3 border-b border-border-primary space-y-2">
-              <div className="font-medium text-base">{open.subject || "(no subject)"}</div>
-              <div className="text-text-secondary">
+              <button className="md:hidden -ml-1 px-2 py-1 rounded hover:bg-bg-hover" onClick={() => setOpen(null)}>
+                ← {folderName}
+              </button>
+              <div className="font-medium text-base break-words">{open.subject || "(no subject)"}</div>
+              <div className="text-text-secondary break-words">
                 {open.fromName} &lt;{open.fromAddress}&gt; · {when(open.date)}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {archive && (
                   <button
-                    className="px-2 py-1 rounded bg-bg-secondary hover:bg-bg-hover"
+                    className={btn}
                     onClick={() =>
                       void act(() => moveMessage(mailboxId, open.folder, open.uid, archive.path), () => remove(open.uid))
                     }
@@ -226,7 +246,7 @@ export function LightApp() {
                   </button>
                 )}
                 <button
-                  className="px-2 py-1 rounded bg-bg-secondary hover:bg-bg-hover"
+                  className={btn}
                   onClick={() =>
                     void act(
                       () =>
@@ -240,7 +260,7 @@ export function LightApp() {
                   Delete
                 </button>
                 <button
-                  className="px-2 py-1 rounded bg-bg-secondary hover:bg-bg-hover"
+                  className={btn}
                   onClick={() =>
                     void act(
                       () => setFlag(mailboxId, open.folder, open.uid, FLAGS.star, !open.isStarred),

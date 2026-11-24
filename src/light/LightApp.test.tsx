@@ -37,7 +37,7 @@ describe("LightApp", () => {
     render(<LightApp />);
     await waitFor(() => screen.getByText("Hello"));
     fireEvent.click(screen.getByText("Hello"));
-    const btn = await screen.findByText("Archive", { selector: "button.px-2" });
+    const btn = await screen.findByText("Archive", { selector: "main button" });
     fireEvent.click(btn);
     await waitFor(() => expect(api.moveMessage).toHaveBeenCalledWith("m1", "INBOX", 7, "Archive"));
     await waitFor(() => expect(screen.queryByText("Hello")).toBeNull());
